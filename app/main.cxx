@@ -1,4 +1,5 @@
 #include <getopt.h>
+#include <iostream>
 
 #include "../library/luxemog.h"
 
@@ -8,7 +9,7 @@ int main(int argc, char **argv)
 {
 	bool verbose = false;
 	bool reverse = false;
-	bool ugly = true;
+	bool minimize = true;
 	bool use_spaces = false;
 	int indent_count = 1;
 	std::string transforms_filename, source_filename, dest_filename;
@@ -17,7 +18,7 @@ int main(int argc, char **argv)
 		option long_options[] = {
 			{"help", no_argument, 0, 'h'},
 			{"verbose", no_argument, 0, 'v'},
-			{"out", required_argument, 0, 'o'}
+			{"out", required_argument, 0, 'o'},
 			{"reverse", no_argument, 0, 'r'},
 			{"minimize", no_argument, 0, 'm'},
 			{"use-spaces", no_argument, 0, 's'},
@@ -75,27 +76,26 @@ int main(int argc, char **argv)
 		source_filename = argv[positional_index++];
 	}
 
-	luxemog::transform_set transforms;
+	luxemog::transform_list transforms;
 
 	try
 	{
 		luxem::reader reader;
 		reader.element([&](std::shared_ptr<luxem::value> &&data)
 		{
-			if (!data->has_type()) throw std::runtime_exception("Missing version.");
+			if (!data->has_type()) throw std::runtime_error("Missing version.");
 			if (data->get_type() != "luxemog 0.0.1") 
 			{
 				std::stringstream message;
 				message << "Unknown version " << data->get_type();
-				throw std::runtime_exception(message.str());
+				throw std::runtime_error(message.str());
 			}
-			data->assert_object();
-			transforms.deserialize(data->as<luxem::object_value>());
+			transforms.deserialize(data->as<luxem::reader::array_context>());
 		});
 
 		auto transform_file = fopen(transforms_filename.c_str(), "rb");
 			
-		if (!dest_file)
+		if (!transform_file)
 		{
 			std::cerr << "Failed to open TRANSFORMS file " << transforms_filename << std::endl;
 			return 1;
@@ -116,12 +116,12 @@ int main(int argc, char **argv)
 
 	try
 	{
-		if (source_filename == "-") { tree = luxem::read_struct(stdin); }
+		if (source_filename == "-") { trees = luxem::read_struct(stdin); }
 		else
 		{
 			auto source_file = fopen(source_filename.c_str(), "rb");
 			
-			if (!dest_file)
+			if (!source_file)
 			{
 				std::cerr << "Failed to open SOURCE file " << source_filename << std::endl;
 				return 1;
@@ -152,9 +152,16 @@ int main(int argc, char **argv)
 
 	try
 	{
+		auto write = [&](luxem::writer &&writer)
+		{
+			if (!minimize)
+				writer.set_pretty(use_spaces ? ' ' : '\t', indent_count);
+			for (auto &tree : trees) writer.value(*tree);
+		};
+
 		if (dest_filename.empty() || dest_filename == "-")
 		{
-			luxem::writer(stdout).value(tree);
+			write({stdout});
 		}
 		else
 		{
@@ -168,13 +175,16 @@ int main(int argc, char **argv)
 
 			{
 				luxem::finally finally([&](void) { fclose(dest_file); });
-				luxem::writer(dest_file).value(tree);
+				write({dest_file});
 			}
 		}
 	}
 	catch (std::exception &exception)
 	{
-		std::cerr << "Error writing to " << dest_filename.empty() ? std::string("-") : dest_filename << ": " << exception.what() << std::endl;
+		std::cerr << 
+			"Error writing to " << (dest_filename.empty() ? std::string("-") : dest_filename) << 
+			": " << exception.what() << 
+			std::endl;
 		return 1;
 	}
 

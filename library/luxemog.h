@@ -1,18 +1,29 @@
 #ifndef luxemog_h
 #define luxemog_h
 
-#include <luxem/luxem.h>
+#include <luxem-cxx/luxem.h>
 
 namespace luxemog
 {
 
-struct transformation
+struct transform
 {
-	transformation(std::shared_ptr<luxem::reader::object_context> &&object);
+	transform(std::shared_ptr<luxem::value> &&data);
 	void apply(std::shared_ptr<luxem::value> &target);
 
 	private:
 		std::shared_ptr<luxem::value> from, to;
+};
+
+struct transform_list
+{
+	transform_list(void);
+	void deserialize(luxem::reader::array_context &context);
+
+	void apply(std::shared_ptr<luxem::value> &target);
+
+	private:
+		std::list<std::unique_ptr<transform>> transforms;
 };
 
 }
