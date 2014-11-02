@@ -90,7 +90,7 @@ int main(int argc, char **argv)
 				message << "Unknown version " << data->get_type();
 				throw std::runtime_error(message.str());
 			}
-			transforms.deserialize(data->as<luxem::reader::array_context>());
+			transforms.deserialize(std::move(data));
 		});
 
 		auto transform_file = fopen(transforms_filename.c_str(), "rb");

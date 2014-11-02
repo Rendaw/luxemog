@@ -8,21 +8,25 @@ namespace luxemog
 
 struct transform
 {
-	transform(std::shared_ptr<luxem::value> &&data);
-	void apply(std::shared_ptr<luxem::value> &target);
+	transform(std::shared_ptr<luxem::value> &&root, bool verbose = false);
+	void apply(std::shared_ptr<luxem::value> &target, bool reverse = false);
 
 	private:
+		bool verbose;
 		std::shared_ptr<luxem::value> from, to;
+		bool from_can_be_from;
+		bool to_can_be_from;
 };
 
 struct transform_list
 {
-	transform_list(void);
-	void deserialize(luxem::reader::array_context &context);
+	transform_list(bool verbose = false);
+	void deserialize(std::shared_ptr<luxem::value> &&root);
 
-	void apply(std::shared_ptr<luxem::value> &target);
+	void apply(std::shared_ptr<luxem::value> &target, bool reverse = false);
 
 	private:
+		bool verbose;
 		std::list<std::unique_ptr<transform>> transforms;
 };
 

@@ -1,6 +1,7 @@
 #include "luxemog.h"
 
 #include <sstream>
+#include <iostream>
 
 typedef std::map<std::string, std::shared_ptr<luxem::value>> match_map;
 
@@ -21,6 +22,8 @@ struct scan_stackable
 
 struct scan_context
 {
+	bool verbose;
+	bool reverse;
 	std::shared_ptr<luxem::value> &from, &to;
 	std::list<std::unique_ptr<scan_stackable>> stack;
 };
@@ -34,6 +37,7 @@ struct transform_stackable
 
 struct transform_context
 {
+	bool verbose;
 	std::list<std::unique_ptr<transform_stackable>> stack;
 };
 
@@ -41,7 +45,7 @@ step_result scan_node(
 	scan_context &context,
 	match_map &matches,
 	bool is_root,
-	std::shared_ptr<luxem::value> target, 
+	std::shared_ptr<luxem::value> &target,
 	std::shared_ptr<luxem::value> const &from);
 
 std::shared_ptr<luxem::value> transform_node(
@@ -52,25 +56,18 @@ std::shared_ptr<luxem::value> transform_node(
 void transform_root(
 	match_map &matches, 
 	std::shared_ptr<luxem::value> &root,
-	std::shared_ptr<luxem::value> const &to);
+	std::shared_ptr<luxem::value> const &to,
+	bool verbose);
 
-struct root_scan_stackable;
+struct match_scan_stackable;
 struct match_definition
 {
 	std::string id;
 
 	step_result scan(scan_context &context, match_map &matches, std::shared_ptr<luxem::value> &target)
 	{
-		auto found = matches.find(id);
-		if (found != matches.end())
-		{
-			std::stringstream message;
-			message << "Match " << id << " matched multiple times.  Matches must only occur once.";
-			throw std::runtime_error(message.str());
-		}
-		matches.emplace(id, target);
-		context.stack.emplace_back(std::make_unique<root_scan_stackable>(target));
-		return step_break;
+		context.stack.emplace_back(std::make_unique<match_scan_stackable>(matches, id, target));
+		return step_push;
 	}
 
 	std::shared_ptr<luxem::value> generate(transform_context &context, match_map const &matches)
@@ -83,6 +80,36 @@ struct match_definition
 			throw std::runtime_error(message.str());
 		}
 		return transform_node(context, matches, found->second);
+	}
+};
+
+struct root_scan_stackable;
+struct match_scan_stackable : scan_stackable
+{
+	match_map &matches;
+	std::string const &id;
+	std::shared_ptr<luxem::value> &target;
+
+	match_scan_stackable(match_map &matches, std::string const &id, std::shared_ptr<luxem::value> &target) : matches(matches), id(id), target(target) {}
+
+	step_result step(scan_context &context, step_result last_result) override
+	{
+		if (last_result == step_push)
+		{
+			context.stack.emplace_back(std::make_unique<root_scan_stackable>(target));
+			return step_push;
+		}
+
+		auto found = matches.find(id);
+		if (found != matches.end())
+		{
+			std::stringstream message;
+			message << "Match " << id << " matched multiple times.  Matches must only occur once.";
+			throw std::runtime_error(message.str());
+		}
+		if (context.verbose) std::cerr << "Saving match " << id << std::endl;
+		matches.emplace(id, target);
+		return last_result;
 	}
 };
 
@@ -108,13 +135,19 @@ struct root_scan_stackable : scan_stackable
 	{
 		if (last_result == step_push)
 		{
-			last_result = scan_node(context, matches, true, root, context.from);
+			if (context.verbose) std::cerr << "Scanning " << root->get_name() << std::endl;
+			last_result = scan_node(context, matches, true, root, context.reverse ? context.to : context.from);
 			if (last_result == step_push) return step_push;
 		}
 
-		if (last_result == step_fail) return step_break;
+		if (last_result == step_fail) 
+		{
+			if (context.verbose) std::cerr << "Failed to match " << root->get_name() << std::endl;
+			return step_break;
+		}
 
-		transform_root(matches, root, context.from);
+		if (context.verbose) std::cerr << "Matched " << root->get_name() << ", transforming" << std::endl;
+		transform_root(matches, root, context.reverse ? context.from : context.to, context.verbose);
 		return step_break;
 	}
 };
@@ -162,7 +195,7 @@ struct object_scan_stackable : scan_stackable
 		}
 		else
 		{
-			if (iterator == target.get_data().end()) return step_break;
+			if (iterator == target.get_data().end()) return step_fail;
 			context.stack.emplace_back(std::make_unique<root_scan_stackable>(iterator->second));
 			++iterator;
 			return step_push;
@@ -213,7 +246,7 @@ struct array_scan_stackable : scan_stackable
 		}
 		else
 		{
-			if (target_iterator == target.get_data().end()) return step_break;
+			if (target_iterator == target.get_data().end()) return step_fail;
 			context.stack.emplace_back(std::make_unique<root_scan_stackable>(*target_iterator));
 			++target_iterator;
 			return step_continue;
@@ -225,16 +258,17 @@ step_result scan_node(
 	scan_context &context, 
 	match_map &matches, 
 	bool is_root, 
-	std::shared_ptr<luxem::value> target, 
+	std::shared_ptr<luxem::value> &target,
 	std::shared_ptr<luxem::value> const &from)
 {
+	if (context.verbose) std::cerr << "Comparing " << target->get_name() << " to " << from->get_name() << std::endl;
 	if (from->is<luxem::primitive_value>())
 	{
 		if (!target->is<luxem::primitive_value>()) return step_fail;
 		auto &from_resolved = from->as<luxem::primitive_value>();
 		auto &target_resolved = target->as<luxem::primitive_value>();
 		if (target_resolved.has_type() != from_resolved.has_type()) return step_fail;
-		if (target_resolved.get_type() != from_resolved.get_type()) return step_fail;
+		if (from_resolved.has_type() && (target_resolved.get_type() != from_resolved.get_type())) return step_fail;
 		if (target_resolved.get_primitive() != from_resolved.get_primitive()) return step_fail;
 	}
 	else if (from->is<luxem::object_value>())
@@ -246,8 +280,8 @@ step_result scan_node(
 		context.stack.push_back(std::make_unique<object_scan_stackable>(
 			matches, 
 			is_root, 
-			from_resolved, 
-			target_resolved));
+			target_resolved,
+			from_resolved));
 		return step_push;
 	}
 	else if (from->is<luxem::array_value>())
@@ -259,8 +293,8 @@ step_result scan_node(
 		context.stack.push_back(std::make_unique<array_scan_stackable>(
 			matches, 
 			is_root, 
-			from_resolved, 
-			target_resolved));
+			target_resolved,
+			from_resolved));
 		return step_push;
 	}
 	else if (from->is<match_definition_standin>())
@@ -359,9 +393,10 @@ std::shared_ptr<luxem::value> transform_node(
 void transform_root(
 	match_map &matches, 
 	std::shared_ptr<luxem::value> &root,
-	std::shared_ptr<luxem::value> const &to)
+	std::shared_ptr<luxem::value> const &to,
+	bool verbose)
 {
-	transform_context context;
+	transform_context context{verbose};
 	root = transform_node(context, matches, to);
 	while (!context.stack.empty()) 
 		if (!context.stack.back()->step(context, matches))
@@ -371,12 +406,16 @@ void transform_root(
 namespace luxemog
 {
 
-transform::transform(std::shared_ptr<luxem::value> &&data)
+transform::transform(std::shared_ptr<luxem::value> &&data, bool verbose) : 
+	verbose(verbose), 
+	from_can_be_from(true), 
+	to_can_be_from(true)
 {
 	auto &object = data->as<luxem::reader::object_context>();
 
 	struct context_type
 	{
+		bool root;
 		std::map<std::string, std::shared_ptr<match_definition>> match_definitions;
 
 		std::shared_ptr<match_definition> get_definition(std::string const &name)
@@ -389,6 +428,7 @@ transform::transform(std::shared_ptr<luxem::value> &&data)
 			else
 			{
 				auto definition = std::make_shared<match_definition>();
+				definition->id = name;
 				match_definitions.emplace(name, definition);
 				return definition;
 			}
@@ -452,45 +492,70 @@ transform::transform(std::shared_ptr<luxem::value> &&data)
 	});
 	object.build_struct(
 		"from", 
-		[this](std::shared_ptr<luxem::value> &&data) { from = std::move(data); }, 
-		process
+		[this](std::shared_ptr<luxem::value> &&data) 
+		{ 
+			from = std::move(data); 
+			if (from->is<match_definition_standin>()) 
+			{ 
+				from_can_be_from = false; 
+				if (this->verbose) 
+					std::cerr << "'from' root element is a *match; disabling as source pattern." << std::endl;
+			}
+		}, 
+		process // Double wrap to do from-specific stuff
 	);
 	object.build_struct(
 		"to", 
-		[this](std::shared_ptr<luxem::value> &&data) { to = std::move(data); }, 
-		process
+		[this](std::shared_ptr<luxem::value> &&data) 
+		{ 
+			to = std::move(data); 
+			if (to->is<match_definition_standin>()) 
+			{ 
+				to_can_be_from = false; 
+				if (this->verbose) 
+					std::cerr << "'to' root element is a *match; disabling as source pattern." << std::endl;
+			}
+		}, 
+		process // Double wrap to do from-specific stuff
 	);
 }
 
-void transform::apply(std::shared_ptr<luxem::value> &target)
+void transform::apply(std::shared_ptr<luxem::value> &target, bool reverse)
 {
-	scan_context context{from, to};
+	if (!reverse && !from_can_be_from) 
+		throw std::runtime_error("'from' cannot be used as source pattern in forward transformation.");
+	if (reverse && !to_can_be_from) 
+		throw std::runtime_error("'to' cannot be used as source pattern in reverse transformation.");
+	scan_context context{verbose, reverse, from, to};
 
+	size_t count = 0;
 	context.stack.push_back(std::make_unique<root_scan_stackable>(target));
 	step_result last_result = step_push;
 	while (!context.stack.empty())
 	{
+		++count;
+		if (count > 1000) assert(false);
 		last_result = context.stack.back()->step(context, last_result);
 		switch (last_result)
 		{
-			case step_fail: assert(false); context.stack.pop_back(); break;
+			case step_fail: context.stack.pop_back(); break;
 			case step_break: context.stack.pop_back(); break;
 			default: break;
 		}
 	}
 }
 	
-transform_list::transform_list(void) {}
+transform_list::transform_list(bool verbose) : verbose(verbose) {}
 
-void transform_list::deserialize(luxem::reader::array_context &context)
+void transform_list::deserialize(std::shared_ptr<luxem::value> &&root)
 {
-	context.element([this](std::shared_ptr<luxem::value> &&data)
-		{ transforms.emplace_back(std::make_unique<transform>(std::move(data))); });
+	root->as<luxem::reader::array_context>().element([this](std::shared_ptr<luxem::value> &&data)
+		{ transforms.emplace_back(std::make_unique<transform>(std::move(data), verbose)); });
 }
 
-void transform_list::apply(std::shared_ptr<luxem::value> &target)
+void transform_list::apply(std::shared_ptr<luxem::value> &target, bool reverse)
 {
-	for (auto &transform : transforms) transform->apply(target);
+	for (auto &transform : transforms) transform->apply(target, reverse);
 }
 
 }
