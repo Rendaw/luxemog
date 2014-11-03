@@ -52,7 +52,7 @@ span.pre { font-family: monospace; font-size: 1.2em; color: #2080A0; }
 		MATCHES
 	]
 ]</pre>
-		<p><span class="pre">VERSION</span> should be <span class="pre">luxemog 0.1.1</span> exactly.  <span class="pre">matches</span> is optional, and contains out-of-tree definitions of matches.  For reversible transforms, this may be clearer than placing the match definition in <span class="pre">to</span> or <span class="pre">from</span>.</p>
+		<p><span class="pre">VERSION</span> should be <span class="pre">luxemog 0.1.1</span> exactly.  <span class="pre">matches</span> is optional, and contains out-of-tree match definitions.  For reversible transforms, placing match definitions in <span class="pre">matches</span> may be clearer than placing the match definition in <span class="pre">to</span> or <span class="pre">from</span>.</p>
 		<div class="method">
 			<h1>PATTERN</h1>
 			<p><span class="pre">PATTERN</span> can be any luxem tree.  A <span class="pre">to</span> <span class="pre">PATTERN</span> is compared to every subtree in the specified document.  If they match, the subtree will be replaced with the expanded <span class="pre">from</span> <span class="pre">PATTERN</span>.  <span class="pre">PATTERN</span> can contain special nodes, with types starting with <span class="pre">*</span>, which have special matching conditions and behaviors.  Special node recognition can be prevented by escaping the <span class="pre">*</span> in the type to <span class="pre">**</span>, which will be converted to <span class="pre">*</span> after the recognition step.</p>
@@ -66,11 +66,12 @@ span.pre { font-family: monospace; font-size: 1.2em; color: #2080A0; }
 }</h1>
 			<p>Can either be a string, where the string specifies the id, or an object with an <span class="pre">id</span> property.  When used in a <span class="pre">from</span> pattern, if the subtree matches <span class="pre">pattern</span>, saves the compared subtree with the id for later use.  When used in a <span class="pre">to</span> pattern, replaces itself with the subtree saved with id.</p>
 			<p>If <span class="pre">*match</span> is specified as a string in either <span class="pre">to</span> or <span class="pre">from</span>, the contents pattern must be re-specified as an object in <span class="pre">MATCHES</span> or the other <span class="pre">PATTERN</span> (<span class="pre">from</span> if a string in <span class="pre">to</span>, <span class="pre">to</span> if a string in <span class="pre">from</span>).</p>
-			<p>The highest level of <span class="pre">from</span> <span class="pre">PATTERN</span>s cannot be a <span class="pre">*match</span>, to prevent infinite recursion.</p>
 		</div>
 		<div class="method">
-			<h1>(*wild) {}</h1>
-			<p>Matches any subtree.  A top-level <span class="pre">PATTERN</span> (<span class="pre">to</span> or <span class="pre">from</span>) containing <span class="pre">*wild</span> cannot be used as a <span class="pre">to</span> pattern.</p>
+			<h1>(*wild) {
+	recurse: true
+}</h1>
+			<p>Matches any subtree.  <span class="pre">recurse</span> is optional and defaults to true.  If <span class="pre">recurse</span> is false, the subtree will not be scanned modified with the current transform.  A <span class="pre">*wild</span> cannot be used at the top-level of a top-level <span class="pre">PATTERN</span> (<span class="pre">to</span> or <span class="pre">from</span>).</p>
 		</div>
 	</div>
 </div>

@@ -59,14 +59,60 @@ void transform_root(
 	std::shared_ptr<luxem::value> const &to,
 	bool verbose);
 
+struct root_scan_stackable;
+
+///////////////////////////////////////////////////////////////////////////////
+// special nodes
+
+struct special : luxem::value
+{
+	static std::string const name;
+
+	virtual ~special(void) {}
+	virtual step_result scan(scan_context &context, match_map &matches, std::shared_ptr<luxem::value> &target) = 0;
+	virtual std::shared_ptr<luxem::value> generate(transform_context &context, match_map const &matches) = 0;
+};
+
+std::string const special::name("special");
+
+struct wildcard : special
+{
+	static std::string const name;
+	std::string const &get_name(void) const override { return name; }
+
+	bool recurse = true;
+
+	step_result scan(scan_context &context, match_map &matches, std::shared_ptr<luxem::value> &target) override
+	{ 
+		if (recurse) 
+		{
+			context.stack.emplace_back(std::make_unique<root_scan_stackable>(target));
+			return step_push;
+		}
+		return step_break; 
+	}
+	
+	std::shared_ptr<luxem::value> generate(transform_context &context, match_map const &matches) override
+		{ throw std::runtime_error("*wild cannot be used in 'from' patterns."); }
+};
+
+std::string const wildcard::name("*wild");
+
 struct match_scan_stackable;
 struct match_definition
 {
 	std::string id;
+	std::shared_ptr<luxem::value> pattern;
 
 	step_result scan(scan_context &context, match_map &matches, std::shared_ptr<luxem::value> &target)
 	{
-		context.stack.emplace_back(std::make_unique<match_scan_stackable>(matches, id, target));
+		if (!pattern) 
+		{
+			std::stringstream message;
+			message << "*match " << id << " is missing 'pattern'.";
+			throw std::runtime_error(message.str());
+		}
+		context.stack.emplace_back(std::make_unique<match_scan_stackable>(matches, id, target, pattern));
 		return step_push;
 	}
 
@@ -83,22 +129,32 @@ struct match_definition
 	}
 };
 
-struct root_scan_stackable;
 struct match_scan_stackable : scan_stackable
 {
 	match_map &matches;
 	std::string const &id;
 	std::shared_ptr<luxem::value> &target;
+	std::shared_ptr<luxem::value> pattern;
 
-	match_scan_stackable(match_map &matches, std::string const &id, std::shared_ptr<luxem::value> &target) : matches(matches), id(id), target(target) {}
+	match_scan_stackable(
+		match_map &matches, 
+		std::string const &id, 
+		std::shared_ptr<luxem::value> &target, 
+		std::shared_ptr<luxem::value> pattern) : 
+		matches(matches), 
+		id(id), 
+		target(target), 
+		pattern(pattern) 
+		{}
 
 	step_result step(scan_context &context, step_result last_result) override
 	{
 		if (last_result == step_push)
 		{
-			context.stack.emplace_back(std::make_unique<root_scan_stackable>(target));
-			return step_push;
+			last_result = scan_node(context, matches, false, target, pattern);
+			if (last_result == step_push) return step_push;
 		}
+		if (last_result == step_fail) return step_fail;
 
 		auto found = matches.find(id);
 		if (found != matches.end())
@@ -113,17 +169,26 @@ struct match_scan_stackable : scan_stackable
 	}
 };
 
-struct match_definition_standin : std::shared_ptr<match_definition>, luxem::value
+struct match_definition_standin : std::shared_ptr<match_definition>, special
 {
 	using std::shared_ptr<match_definition>::shared_ptr;
 	using std::shared_ptr<match_definition>::operator =;
 
 	static std::string const name;
 	std::string const &get_name(void) const override { return name; }
+	
+	step_result scan(scan_context &context, match_map &matches, std::shared_ptr<luxem::value> &target) override
+		{ return (*this)->scan(context, matches, target); }
+	
+	std::shared_ptr<luxem::value> generate(transform_context &context, match_map const &matches) override
+		{ return (*this)->generate(context, matches); }
 };
 	
-std::string const match_definition_standin::name("match_definition");
+std::string const match_definition_standin::name("*match");
 	
+///////////////////////////////////////////////////////////////////////////////
+// scanning
+
 struct root_scan_stackable : scan_stackable
 {
 	std::shared_ptr<luxem::value> &root;
@@ -270,6 +335,7 @@ step_result scan_node(
 		if (target_resolved.has_type() != from_resolved.has_type()) return step_fail;
 		if (from_resolved.has_type() && (target_resolved.get_type() != from_resolved.get_type())) return step_fail;
 		if (target_resolved.get_primitive() != from_resolved.get_primitive()) return step_fail;
+		return step_break;
 	}
 	else if (from->is<luxem::object_value>())
 	{
@@ -297,18 +363,19 @@ step_result scan_node(
 			from_resolved));
 		return step_push;
 	}
-	else if (from->is<match_definition_standin>())
+	else if (from->is_derived<special>())
 	{
-		auto &definition = from->as<match_definition_standin>();
-		return definition->scan(context, matches, target);
+		return from->as_derived<special>().scan(context, matches, target);
 	}
 	else
 	{
 		assert(false);
 		return step_fail;
 	}
-	return step_break;
 }
+
+///////////////////////////////////////////////////////////////////////////////
+// transforming
 
 struct object_transform_stackable : transform_stackable
 {
@@ -379,9 +446,9 @@ std::shared_ptr<luxem::value> transform_node(
 		context.stack.emplace_back(std::make_unique<array_transform_stackable>(out, to->as<luxem::array_value>()));
 		return out;
 	}
-	else if (to->is<match_definition_standin>())
+	else if (to->is_derived<special>())
 	{
-		return to->as<match_definition_standin>()->generate(context, matches);
+		return to->as_derived<special>().generate(context, matches);
 	}
 	else
 	{
@@ -403,6 +470,117 @@ void transform_root(
 			context.stack.pop_back();
 }
 
+///////////////////////////////////////////////////////////////////////////////
+// rule deserialization 
+
+struct build_context
+{
+	bool root;
+	std::map<std::string, std::shared_ptr<match_definition>> match_definitions;
+		
+	struct pre_match_definition
+	{
+		std::string id;
+		std::shared_ptr<luxem::value> pattern;
+	};
+
+	std::shared_ptr<match_definition> get_definition(std::string const &id)
+	{
+		auto found = match_definitions.find(id);
+		if (found != match_definitions.end())
+		{
+			return found->second;
+		}
+		else
+		{
+			auto definition = std::make_shared<match_definition>();
+			definition->id = id;
+			match_definitions.emplace(id, definition);
+			return definition;
+		}
+	}
+
+	std::shared_ptr<luxem::value> match_from_object(std::shared_ptr<luxem::value> &data);
+};
+
+bool build_special(build_context &context, std::shared_ptr<luxem::value> &data)
+{
+	if (data->get_type() == "*match")
+	{
+		if (data->is<luxem::primitive_value>())
+		{
+			auto &name = data->as<luxem::primitive_value>().get_primitive();
+			data = std::make_shared<match_definition_standin>(context.get_definition(name));
+		}
+		else if (data->is<luxem::reader::object_context>())
+		{
+			data = context.match_from_object(data);
+		}
+		else throw std::runtime_error("*match definitions must be strings or objects.");
+	}
+	else if (data->get_type() == "*wild")
+	{
+		auto replacement = std::make_shared<wildcard>();
+		data->as<luxem::reader::object_context>().element(
+			"recurse", 
+			[replacement](std::shared_ptr<luxem::value> &&data)
+			{ 
+				replacement->recurse = data->as<luxem::primitive_value>().get_bool(); 
+				std::cout << "raw is " << data->as<luxem::primitive_value>().get_primitive() << std::endl;
+				std::cout << "raw translated is " << data->as<luxem::primitive_value>().get_bool() << std::endl;
+				std::cout << "recurse is " << replacement->recurse << std::endl;
+			});
+		data = replacement;
+	}
+	else return false;
+	return true;
+}
+
+void build_preprocess(build_context &context, std::shared_ptr<luxem::value> &data)
+{
+	if (data->has_type())
+	{
+		if (build_special(context, data)) {}
+		else if (data->get_type().substr(0, 1) == "*")
+		{
+			data->set_type(data->get_type().substr(1));
+		}
+	}
+}
+	
+std::shared_ptr<luxem::value> build_context::match_from_object(std::shared_ptr<luxem::value> &data)
+{
+	auto &object_data = data->as<luxem::reader::object_context>();
+	auto standin = std::make_shared<match_definition_standin>();
+	auto match_context = std::make_shared<pre_match_definition>();
+	object_data.element("id", [match_context](std::shared_ptr<luxem::value> &&data)
+	{
+		match_context->id = data->as<luxem::primitive_value>().get_primitive();
+	});
+	object_data.build_struct(
+		"pattern", 
+		[match_context](std::shared_ptr<luxem::value> &&data)
+		{
+			match_context->pattern = std::move(data);
+		},
+		[this](std::string const &, std::shared_ptr<luxem::value> &data)
+		{ 
+			build_preprocess(*this, data); 
+		});
+	object_data.finally([&, match_context, standin](void)
+	{
+		if (match_context->id.empty()) throw std::runtime_error("Missing *match name.");
+		*standin = get_definition(match_context->id);
+		if (!match_context->pattern) throw std::runtime_error("Missing *match pattern.");
+		(*standin)->pattern = std::move(match_context->pattern);
+	});
+	
+	return standin;
+}
+
+///////////////////////////////////////////////////////////////////////////////
+// interface
+
 namespace luxemog
 {
 
@@ -412,111 +590,52 @@ transform::transform(std::shared_ptr<luxem::value> &&data, bool verbose) :
 	to_can_be_from(true)
 {
 	auto &object = data->as<luxem::reader::object_context>();
-
-	struct context_type
-	{
-		bool root;
-		std::map<std::string, std::shared_ptr<match_definition>> match_definitions;
-
-		std::shared_ptr<match_definition> get_definition(std::string const &name)
-		{
-			auto found = match_definitions.find(name);
-			if (found != match_definitions.end())
-			{
-				return found->second;
-			}
-			else
-			{
-				auto definition = std::make_shared<match_definition>();
-				definition->id = name;
-				match_definitions.emplace(name, definition);
-				return definition;
-			}
-		}
-
-		std::shared_ptr<luxem::value> match_from_object(std::shared_ptr<luxem::value> &data)
-		{
-			struct match_context_type
-			{
-				std::string id;
-			};
-
-			auto &object_data = data->as<luxem::reader::object_context>();
-			auto standin = std::make_shared<match_definition_standin>();
-			auto match_context = std::make_shared<match_context_type>();
-			object_data.element("name", [match_context](std::shared_ptr<luxem::value> &&data)
-			{
-				match_context->id = data->as<luxem::primitive_value>().get_primitive();
-			});
-			object_data.finally([&, match_context, standin](void)
-			{
-				if (match_context->id.empty()) throw std::runtime_error("Missing match name.");
-				*standin = get_definition(match_context->id);
-			});
-			
-			return standin;
-		};
-	};
-	auto context = std::make_shared<context_type>();
-
-	auto process = [context](std::string const &key, std::shared_ptr<luxem::value> &data)
-	{
-		if (data->has_type())
-		{
-			if (data->get_type() == "*match")
-			{
-				if (data->is<luxem::primitive_value>())
-				{
-					auto &name = data->as<luxem::primitive_value>().get_primitive();
-					data = std::make_shared<match_definition_standin>(context->get_definition(name));
-				}
-				else if (data->is<luxem::reader::object_context>())
-				{
-					data = context->match_from_object(data);
-				}
-				else throw std::runtime_error("*match definitions must be strings or objects.");
-			}
-			else if (data->get_type().substr(0, 1) == "*")
-			{
-				data->set_type(data->get_type().substr(1));
-			}
-		}
-	};
+	
+	auto context = std::make_shared<build_context>();
 
 	object.element("matches", [this, context](std::shared_ptr<luxem::value> &&data)
 	{
 		data->as<luxem::reader::array_context>().element([this, context](std::shared_ptr<luxem::value> &&data)
 		{
-			context->match_from_object(data);
+			if (!build_special(*context, data)) 
+				throw std::runtime_error("Only specials may be defined in 'matches'.");
 		});
 	});
+
 	object.build_struct(
 		"from", 
 		[this](std::shared_ptr<luxem::value> &&data) 
 		{ 
 			from = std::move(data); 
-			if (from->is<match_definition_standin>()) 
+			if (from->is<wildcard>()) 
 			{ 
 				from_can_be_from = false; 
 				if (this->verbose) 
-					std::cerr << "'from' root element is a *match; disabling as source pattern." << std::endl;
+					std::cerr << "'from' root element is a *wild; disabling as source pattern." << std::endl;
 			}
 		}, 
-		process // Double wrap to do from-specific stuff
+		[context](std::string const &, std::shared_ptr<luxem::value> &data)
+		{ 
+			build_preprocess(*context, data); 
+		}
 	);
+
 	object.build_struct(
 		"to", 
 		[this](std::shared_ptr<luxem::value> &&data) 
 		{ 
 			to = std::move(data); 
-			if (to->is<match_definition_standin>()) 
+			if (to->is<wildcard>()) 
 			{ 
 				to_can_be_from = false; 
 				if (this->verbose) 
-					std::cerr << "'to' root element is a *match; disabling as source pattern." << std::endl;
+					std::cerr << "'to' root element is a *wild; disabling as source pattern." << std::endl;
 			}
 		}, 
-		process // Double wrap to do from-specific stuff
+		[context](std::string const &, std::shared_ptr<luxem::value> &data)
+		{ 
+			build_preprocess(*context, data); 
+		}
 	);
 }
 

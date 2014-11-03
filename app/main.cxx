@@ -76,7 +76,7 @@ int main(int argc, char **argv)
 		source_filename = argv[positional_index++];
 	}
 
-	luxemog::transform_list transforms;
+	luxemog::transform_list transforms(verbose);
 
 	try
 	{
@@ -142,7 +142,7 @@ int main(int argc, char **argv)
 	try
 	{
 		for (auto &tree : trees) 
-			transforms.apply(tree);
+			transforms.apply(tree, reverse);
 	}
 	catch (std::exception &exception)
 	{
