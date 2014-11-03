@@ -1,0 +1,37 @@
+pkgname=luxemog
+pkgver=0.0.1
+pkgrel=1
+epoch=
+pkgdesc="A utility and c++ library for transforming luxem."
+arch=('x86_64')
+url="https://github.com/Rendaw/luxemog"
+license=('bsd')
+groups=()
+depends=('luxem-cxx>=0.0.1')
+makedepends=()
+checkdepends=()
+optdepends=()
+provides=()
+conflicts=()
+replaces=()
+backup=()
+options=()
+install=
+changelog=
+source=($pkgname-$pkgver.tar.gz)
+noextract=()
+md5sums=('')
+
+BDIR=../../..
+PDIR=$BDIR/variant-package-arch64
+
+package() {
+	echo `pwd`
+	mkdir -p $pkgdir/usr/lib
+	cp $PDIR/library/libluxemog.so $pkgdir/usr/lib/
+	mkdir -p $pkgdir/usr/include/luxemog
+	cp $BDIR/library/*.h $pkgdir/usr/include/luxemog/
+	mkdir -p $pkgdir/usr/bin
+	cp $PDIR/app/luxemog $pkgdir/usr/bin/
+}
+

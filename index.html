@@ -1,0 +1,193 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+	<title>luxemog</title>
+	<style type="text/css">
+body { margin: 0px; padding: 0px; font-family: sans; }
+
+body > h1 { padding-left: 1em; }
+body > p { padding-left: 1em; }
+body > div > h1 { padding-top: 1em; padding-left: 0.5em; font-size: 1.75em; border-bottom: 1px solid black; }
+div { padding-right: 0.5em; padding-left: 0.5em; }
+div.class { padding-left: 1em; }
+div.class > h1 { font-size: 1.5em; }
+div.method { padding-left: 3em; padding-bottom: 1em; }
+div.method > h1 { font-size: 1.2em; margin-left: -1.5em; font-family: monospace; }
+div.method > h2 { font-size: 1.1em; font-weight: normal; }
+pre { border-left: 1px solid grey; padding-left: 0.5em; margin-left: 0.2em; background-color: #F0F0F0; }
+span.pre { font-family: monospace; font-size: 1.2em; color: #2080A0; }
+	</style>
+</head>
+<body>
+
+<h1>luxemog Documentation</h1>
+<p>luxemog is a tool for modifying <a href="https://github.com/Rendaw/luxem">luxem</a> documents.  A luxemog definition contains a list of transforms to apply to a document sequentially.  Each transform contains a pattern to match, which also extracts data, and a pattern to replace the match, which can use the extracted data.</p>
+<p>Table of contents:</p>
+<ul>
+	<li><a href="#luxemog_spec">Transform Specification</a></li>
+	<li><a href="#luxemog_examples">Examples</a></li>
+	<li>
+		<a href="#app">luxemog</a>
+		<ul>
+			<li><a href="#app_usage">Usage</a></li>
+		</ul>
+	</li>
+	<li>
+		<a href="#api">API</a>
+		<ul>
+			<li><a href="#luxemog_transform">luxemog::transform</a></li>
+			<li><a href="#luxemog_transform_list">luxemog::transform_list</a></li>
+		</ul>
+	</li>
+</ul>
+
+<div>
+	<div class="class">
+		<a name="luxemog_spec"></a>
+		<h1>Transform Specification</h1>
+		<pre>(VERSION) [
+	to: PATTERN,
+	from: PATTERN,
+	matches: [
+		MATCHES
+	]
+]</pre>
+		<p><span class="pre">VERSION</span> should be <span class="pre">luxemog 0.1.1</span> exactly.  <span class="pre">matches</span> is optional, and contains out-of-tree definitions of matches.  For reversible transforms, this may be clearer than placing the match definition in <span class="pre">to</span> or <span class="pre">from</span>.</p>
+		<div class="method">
+			<h1>PATTERN</h1>
+			<p><span class="pre">PATTERN</span> can be any luxem tree.  A <span class="pre">to</span> <span class="pre">PATTERN</span> is compared to every subtree in the specified document.  If they match, the subtree will be replaced with the expanded <span class="pre">from</span> <span class="pre">PATTERN</span>.  <span class="pre">PATTERN</span> can contain special nodes, with types starting with <span class="pre">*</span>, which have special matching conditions and behaviors.  Special node recognition can be prevented by escaping the <span class="pre">*</span> in the type to <span class="pre">**</span>, which will be converted to <span class="pre">*</span> after the recognition step.</p>
+		</div>
+		<p>Special nodes:</p>
+		<div class="method">
+			<h1>(*match) id</h1>
+			<h1>(*match) {
+	id: ID,
+	pattern: PATTERN
+}</h1>
+			<p>Can either be a string, where the string specifies the id, or an object with an <span class="pre">id</span> property.  When used in a <span class="pre">from</span> pattern, if the subtree matches <span class="pre">pattern</span>, saves the compared subtree with the id for later use.  When used in a <span class="pre">to</span> pattern, replaces itself with the subtree saved with id.</p>
+			<p>If <span class="pre">*match</span> is specified as a string in either <span class="pre">to</span> or <span class="pre">from</span>, the contents pattern must be re-specified as an object in <span class="pre">MATCHES</span> or the other <span class="pre">PATTERN</span> (<span class="pre">from</span> if a string in <span class="pre">to</span>, <span class="pre">to</span> if a string in <span class="pre">from</span>).</p>
+			<p>The highest level of <span class="pre">from</span> <span class="pre">PATTERN</span>s cannot be a <span class="pre">*match</span>, to prevent infinite recursion.</p>
+		</div>
+		<div class="method">
+			<h1>(*wild) {}</h1>
+			<p>Matches any subtree.  A top-level <span class="pre">PATTERN</span> (<span class="pre">to</span> or <span class="pre">from</span>) containing <span class="pre">*wild</span> cannot be used as a <span class="pre">to</span> pattern.</p>
+		</div>
+	</div>
+</div>
+
+<div>
+	<a name="luxemog_examples"></a>
+	<h1>Examples</h1>
+	<div class="class">
+		<h1>A reversible transform</h1>
+		<p>Transforms definition:</p>
+		<pre>(luxemog 0.0.1) [
+	{
+		from: [
+			(*match) w/e,
+			735,
+		],
+		to: [
+			(*match) w/e,
+			28,
+		],
+		matches: [
+			(*match) {
+				id: w/e,
+				pattern: (*wild) {},
+			}
+		]
+	},
+]</pre>
+		<p>This definition may be applied in reverse.  However, the reverse application is not the inverse of the forward application.</p>
+		<p>Input:</p>
+		<pre>[
+	[
+		22,
+		735,
+	],
+	735,
+]</pre>
+		<p>Output:</p>
+		<pre>[
+	[
+		22,
+		28,
+	],
+	28,
+]</pre>
+	</div>
+</div>
+
+<div>
+	<a name="app"></a>
+	<h1>luxemog</h1>
+	<div class="class">
+		<a name="app_usage"></a>
+		<h1>Usage</h1>
+		<pre>usage: luxemog OPTIONS TRANSFORMS SOURCE
+
+    OPTIONS can be any combination or none of the following:
+      -h, --help                      Show this message.
+      -v, --verbose                   Write diagnostic messages to stderr.
+      -o FILE, --out FILE             Write the result to FILE rather than
+                                      stdout.  If '-', use stdout.
+      -r, --reverse                   Reverse 'to' and 'from' patterns.
+      -m, --minimize                  Don't insert whitespace to prettify
+                                      output.
+      -s, --use-spaces                Use spaces instead of tabs to prettify
+                                      output
+      -i COUNT, --indent-count COUNT  Use COUNT spaces or tabs to indent
+                                      pretty output
+
+    TRANSFORMS
+      A filename.
+
+    SOURCE
+      A filename or '-' for stdin.
+
+Transforms SOURCE based on the transformations in the TRANSFORMS file.</pre>
+	</div>
+</div>
+
+<div>
+	<a name="api"></a>
+	<h1>API</h1>
+	<div class="class">
+		<a name="luxemog_transform"></a>
+		<h1>luxemog::transform</h1>
+		<p>This represents a single transform.</p>
+		<p>This is typically instantianted by <span class="pre">luxemog::transform_list</span>, but it is possible to instantiate individual transforms.</p>
+		<div class="method">
+			<h1>transform::transform(std::shared_ptr&lt;luxem::value&gt; &amp;&amp;root, bool verbose = false)</h1>
+			<p><span class="pre">root</span> must be a <span class="pre">luxem::reader::object_context</span>.  The constructor will check the type of <span class="pre">root</span> and raise a <span class="pre">std::runtime_error</span> if it is incorrect.  If <span class="pre">verbose</span> is true, various diagnostic messages will be written to <span class="pre">stderr</span> both during construction and operation.</p>
+		</div>
+		<div class="method">
+			<h1>void transform::apply(std::shared_ptr&lt;luxem::value&gt; &amp;target, bool reverse = false)</h1>
+			<p>Transforms <span class="pre">target</span> in place.  If <span class="pre">reverse</span> is true, swaps the <span class="pre">from</span> and <span class="pre">to</span> patterns.</p>
+		</div>
+	</div>
+	<div class="class">
+		<a name="luxemog_transform_list"></a>
+		<h1>luxemog::transform_list</h1>
+		<p>This is a utility class for deserializing and appling multiple transforms.</p>
+		<div class="method">
+			<h1>transform_list::transform_list(bool verbose = false)</h1>
+			<p>Default initialization.  <span class="pre">verbose</span> will be passed to all deserialized transforms.</p>
+		</div>
+		<div class="method">
+			<h1>void transform_list::deserialize(std::shared_ptr&lt;luxem::value&gt; &amp;&amp;root);</h1>
+			<p>Adds transforms from <span class="pre">root</span>, which must be a <span class="pre">luxem::reader::array_context</span>.  Will check the type of <span class="pre">root</span> and raise a <span class="pre">std::runtime_error</span> if it is incorrect.  This method can be called many times; transforms are appended to the existing transform list.</p>
+		</div>
+		<div class="method">
+			<h1>void transform_list::apply(std::shared_ptr&lt;luxem::value&gt; &amp;target, bool reverse = false)</h1>
+			<p>Transforms <span class="pre">target</span> in place.  Applies all transforms, sequentially.  If <span class="pre">reverse</span> is true, swaps the <span class="pre">from</span> and <span class="pre">to</span> patterns in each transform.</p>
+		</div>
+	</div>
+</div>
+
+<p>Rendaw, Zarbosoft &copy; 2014</p>
+
+</body>
+</html>
+
