@@ -9,7 +9,7 @@ int main(int argc, char **argv)
 {
 	bool verbose = false;
 	bool reverse = false;
-	bool minimize = true;
+	bool minimize = false;
 	bool use_spaces = false;
 	int indent_count = 1;
 	std::string transforms_filename, source_filename, dest_filename;
@@ -25,10 +25,9 @@ int main(int argc, char **argv)
 			{"indent-count", required_argument, 0, 'i'},
 			{0, 0, 0, 0}
 		};
-		int positional_index = 0;
 
 		int next;
-		while ((next = getopt_long(argc, argv, "hvo:rmsi:", long_options, &positional_index)) != -1) 
+		while ((next = getopt_long(argc, argv, "hvo:rmsi:", long_options, nullptr)) != -1) 
 		{
 			switch (next) 
 			{
@@ -56,24 +55,25 @@ int main(int argc, char **argv)
 "      A filename or '-' for stdin.\n"
 "\n"
 "Transforms SOURCE based on the transformations in the TRANSFORMS file.\n" << std::endl;
-					break;
+					return 0;
 				case 'v': verbose = true; break;
 				case 'o': dest_filename = optarg; break;
 				case 'r': reverse = true; break;
 				case 'm': minimize = true; break;
 				case 's': use_spaces = true; break;
 				case 'i': indent_count = atoi(optarg); break;
+				case '?': return 1;
 			}
 		}
 
-		if (argc - positional_index < 2)
+		if (argc - optind < 2)
 		{
 			std::cerr << "Missing one or more of: TRANSFORMS, SOURCE" << std::endl;
 			return 1;
 		}
 
-		transforms_filename = argv[positional_index++];
-		source_filename = argv[positional_index++];
+		transforms_filename = argv[optind++];
+		source_filename = argv[optind++];
 	}
 
 	luxemog::transform_list transforms(verbose);
