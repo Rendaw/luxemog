@@ -221,12 +221,12 @@ struct object_scan_stackable : scan_stackable
 {
 	match_map &matches;
 	bool root;
-	luxem::object_value &target, &from;
+	luxem::object &target, &from;
 
-	luxem::object_value::object_data::iterator iterator;
+	luxem::object::object_data::iterator iterator;
 	bool first_wind;
 
-	object_scan_stackable(match_map &matches, bool root, luxem::object_value &target, luxem::object_value &from) :
+	object_scan_stackable(match_map &matches, bool root, luxem::object &target, luxem::object &from) :
 		matches(matches),
 		root(root),
 		target(target),
@@ -272,12 +272,12 @@ struct array_scan_stackable : scan_stackable
 {
 	match_map &matches;
 	bool root;
-	luxem::array_value &target, &from;
+	luxem::array &target, &from;
 
-	luxem::array_value::array_data::iterator target_iterator, from_iterator;
+	luxem::array::array_data::iterator target_iterator, from_iterator;
 	bool first_wind;
 
-	array_scan_stackable(match_map &matches, bool root, luxem::array_value &target, luxem::array_value &from) :
+	array_scan_stackable(match_map &matches, bool root, luxem::array &target, luxem::array &from) :
 		matches(matches),
 		root(root),
 		target(target),
@@ -327,21 +327,21 @@ step_result scan_node(
 	std::shared_ptr<luxem::value> const &from)
 {
 	if (context.verbose) std::cerr << "Comparing " << target->get_name() << " to " << from->get_name() << std::endl;
-	if (from->is<luxem::primitive_value>())
+	if (from->is<luxem::primitive>())
 	{
-		if (!target->is<luxem::primitive_value>()) return step_fail;
-		auto &from_resolved = from->as<luxem::primitive_value>();
-		auto &target_resolved = target->as<luxem::primitive_value>();
+		if (!target->is<luxem::primitive>()) return step_fail;
+		auto &from_resolved = from->as<luxem::primitive>();
+		auto &target_resolved = target->as<luxem::primitive>();
 		if (target_resolved.has_type() != from_resolved.has_type()) return step_fail;
 		if (from_resolved.has_type() && (target_resolved.get_type() != from_resolved.get_type())) return step_fail;
 		if (target_resolved.get_primitive() != from_resolved.get_primitive()) return step_fail;
 		return step_break;
 	}
-	else if (from->is<luxem::object_value>())
+	else if (from->is<luxem::object>())
 	{
-		if (!target->is<luxem::object_value>()) return step_fail;
-		auto &from_resolved = from->as<luxem::object_value>();
-		auto &target_resolved = target->as<luxem::object_value>();
+		if (!target->is<luxem::object>()) return step_fail;
+		auto &from_resolved = from->as<luxem::object>();
+		auto &target_resolved = target->as<luxem::object>();
 		if (from_resolved.get_data().size() != target_resolved.get_data().size()) return step_fail;
 		context.stack.push_back(std::make_unique<object_scan_stackable>(
 			matches, 
@@ -350,11 +350,11 @@ step_result scan_node(
 			from_resolved));
 		return step_push;
 	}
-	else if (from->is<luxem::array_value>())
+	else if (from->is<luxem::array>())
 	{
-		if (!target->is<luxem::array_value>()) return step_fail;
-		auto &from_resolved = from->as<luxem::array_value>();
-		auto &target_resolved = target->as<luxem::array_value>();
+		if (!target->is<luxem::array>()) return step_fail;
+		auto &from_resolved = from->as<luxem::array>();
+		auto &target_resolved = target->as<luxem::array>();
 		if (from_resolved.get_data().size() != target_resolved.get_data().size()) return step_fail;
 		context.stack.push_back(std::make_unique<array_scan_stackable>(
 			matches, 
@@ -379,12 +379,12 @@ step_result scan_node(
 
 struct object_transform_stackable : transform_stackable
 {
-	std::shared_ptr<luxem::object_value> out;
-	luxem::object_value const &to;
+	std::shared_ptr<luxem::object> out;
+	luxem::object const &to;
 
-	luxem::object_value::object_data::const_iterator to_iterator;
+	luxem::object::object_data::const_iterator to_iterator;
 
-	object_transform_stackable(std::shared_ptr<luxem::object_value> out, luxem::object_value &to) : 
+	object_transform_stackable(std::shared_ptr<luxem::object> out, luxem::object &to) : 
 		out(out), 
 		to(to), 
 		to_iterator(to.get_data().begin()) 
@@ -401,12 +401,12 @@ struct object_transform_stackable : transform_stackable
 
 struct array_transform_stackable : transform_stackable
 {
-	std::shared_ptr<luxem::array_value> out;
-	luxem::array_value const &to;
+	std::shared_ptr<luxem::array> out;
+	luxem::array const &to;
 
-	luxem::array_value::array_data::const_iterator to_iterator;
+	luxem::array::array_data::const_iterator to_iterator;
 
-	array_transform_stackable(std::shared_ptr<luxem::array_value> out, luxem::array_value &to) : 
+	array_transform_stackable(std::shared_ptr<luxem::array> out, luxem::array &to) : 
 		out(out), 
 		to(to), 
 		to_iterator(to.get_data().begin()) 
@@ -426,24 +426,24 @@ std::shared_ptr<luxem::value> transform_node(
 	match_map const &matches, 
 	std::shared_ptr<luxem::value> const &to)
 {
-	if (to->is<luxem::primitive_value>())
+	if (to->is<luxem::primitive>())
 	{
-		auto out = std::make_shared<luxem::primitive_value>(to->as<luxem::primitive_value>().get_primitive());
+		auto out = std::make_shared<luxem::primitive>(to->as<luxem::primitive>().get_primitive());
 		if (to->has_type()) out->set_type(to->get_type());
 		return out;
 	}
-	else if (to->is<luxem::object_value>())
+	else if (to->is<luxem::object>())
 	{
-		auto out = std::make_shared<luxem::object_value>();
+		auto out = std::make_shared<luxem::object>();
 		if (to->has_type()) out->set_type(to->get_type());
-		context.stack.emplace_back(std::make_unique<object_transform_stackable>(out, to->as<luxem::object_value>()));
+		context.stack.emplace_back(std::make_unique<object_transform_stackable>(out, to->as<luxem::object>()));
 		return out;
 	}
-	else if (to->is<luxem::array_value>())
+	else if (to->is<luxem::array>())
 	{
-		auto out = std::make_shared<luxem::array_value>();
+		auto out = std::make_shared<luxem::array>();
 		if (to->has_type()) out->set_type(to->get_type());
-		context.stack.emplace_back(std::make_unique<array_transform_stackable>(out, to->as<luxem::array_value>()));
+		context.stack.emplace_back(std::make_unique<array_transform_stackable>(out, to->as<luxem::array>()));
 		return out;
 	}
 	else if (to->is_derived<special>())
@@ -507,9 +507,9 @@ bool build_special(build_context &context, std::shared_ptr<luxem::value> &data)
 {
 	if (data->get_type() == "*match")
 	{
-		if (data->is<luxem::primitive_value>())
+		if (data->is<luxem::primitive>())
 		{
-			auto &name = data->as<luxem::primitive_value>().get_primitive();
+			auto &name = data->as<luxem::primitive>().get_primitive();
 			data = std::make_shared<match_definition_standin>(context.get_definition(name));
 		}
 		else if (data->is<luxem::reader::object_context>())
@@ -525,9 +525,9 @@ bool build_special(build_context &context, std::shared_ptr<luxem::value> &data)
 			"recurse", 
 			[replacement](std::shared_ptr<luxem::value> &&data)
 			{ 
-				replacement->recurse = data->as<luxem::primitive_value>().get_bool(); 
-				std::cout << "raw is " << data->as<luxem::primitive_value>().get_primitive() << std::endl;
-				std::cout << "raw translated is " << data->as<luxem::primitive_value>().get_bool() << std::endl;
+				replacement->recurse = data->as<luxem::primitive>().get_bool(); 
+				std::cout << "raw is " << data->as<luxem::primitive>().get_primitive() << std::endl;
+				std::cout << "raw translated is " << data->as<luxem::primitive>().get_bool() << std::endl;
 				std::cout << "recurse is " << replacement->recurse << std::endl;
 			});
 		data = replacement;
@@ -555,7 +555,7 @@ std::shared_ptr<luxem::value> build_context::match_from_object(std::shared_ptr<l
 	auto match_context = std::make_shared<pre_match_definition>();
 	object_data.element("id", [match_context](std::shared_ptr<luxem::value> &&data)
 	{
-		match_context->id = data->as<luxem::primitive_value>().get_primitive();
+		match_context->id = data->as<luxem::primitive>().get_primitive();
 	});
 	object_data.build_struct(
 		"pattern", 
