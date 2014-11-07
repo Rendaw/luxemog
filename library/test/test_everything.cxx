@@ -340,6 +340,41 @@ int main(void)
 		"2"
 	);
 
+	// subtransforms
+	test
+	(
+		"["
+			"{"
+				"from: {x: (*match) value},"
+				"subtransforms: ["
+					"{"
+						"from: 7,"
+						"to: 9,"
+					"},"
+				"],"
+			"},"
+		"]",
+		"{x: 7}",
+		"{x: 9}"
+	);
+	
+	test
+	(
+		"["
+			"{"
+				"from: {x: (*match) value},"
+				"subtransforms: ["
+					"{"
+						"from: 7,"
+						"to: 9,"
+					"},"
+				"],"
+			"},"
+		"]",
+		"{y: 7}",
+		"{y: 7}"
+	);
+
 	return 0;
 }
 

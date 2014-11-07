@@ -20,12 +20,24 @@ struct scan_stackable
 	virtual step_result step(scan_context &context, step_result last_result) = 0;
 };
 
+struct function_scan_stackable : scan_stackable
+{
+	std::function<step_result(scan_context &context, step_result last_result)> callback;
+	step_result step(scan_context &context, step_result last_result) override 
+		{ return callback(context, last_result); }
+};
+
 struct scan_context
 {
 	bool verbose;
 	bool reverse;
-	std::shared_ptr<luxem::value> &from, &to;
+	std::list<luxemog::transform::transform_data *> transform_stack;
 	std::list<std::unique_ptr<scan_stackable>> stack;
+
+	std::shared_ptr<luxem::value> &get_from(void) 
+		{ return reverse ? transform_stack.back()->to : transform_stack.back()->from; }
+	std::shared_ptr<luxem::value> &get_to(void)
+		{ return reverse ? transform_stack.back()->from : transform_stack.back()->to; }
 };
 
 struct transform_context;
@@ -57,8 +69,6 @@ void transform_root(
 	std::shared_ptr<luxem::value> &root,
 	std::shared_ptr<luxem::value> const &to,
 	bool verbose);
-
-struct root_scan_stackable;
 
 struct build_context;
 void build_preprocess(build_context &context, std::shared_ptr<luxem::value> &data);
@@ -267,68 +277,121 @@ std::string const match_definition_standin::name("*match");
 ///////////////////////////////////////////////////////////////////////////////
 // scanning
 
-struct root_scan_stackable : scan_stackable
+struct scan_root_stackable : scan_stackable
 {
 	std::shared_ptr<luxem::value> &root;
-	match_map matches;
-	std::function<bool(scan_context &context)> iterate;
 
-	root_scan_stackable(std::shared_ptr<luxem::value> &root) : root(root) {}
+	struct substackable
+	{
+		std::function<step_result(scan_context &context, step_result last_result, std::unique_ptr<substackable> &next_state)> callback;
+		template <typename callback_type> substackable(callback_type &&callback) : callback(std::move(callback)) {}
+		step_result step(scan_context &context, step_result last_result, std::unique_ptr<substackable> &next_state)
+			{ return callback(context, last_result, next_state); }
+	};
+
+	step_result begin_recurse(std::unique_ptr<substackable> &next_state)
+	{
+		if (root->is<luxem::object>())
+		{
+			auto &data = root->as<luxem::object>().get_data();
+			auto temp = std::move(next_state);
+			next_state = std::make_unique<substackable>(
+				[this, &data, iterator = data.begin()](
+					scan_context &context, 
+					step_result last_result, 
+					std::unique_ptr<substackable> &next_state) mutable
+				{
+					if (iterator == data.end()) return step_break;
+					context.stack.push_back(std::make_unique<scan_root_stackable>(iterator->second));
+					++iterator;
+					return step_push;
+				});
+		}
+		else if (root->is<luxem::array>())
+		{
+			auto &data = root->as<luxem::array>().get_data();
+			next_state = std::make_unique<substackable>(
+				[this, &data, iterator = data.begin()](
+					scan_context &context, 
+					step_result last_result, 
+					std::unique_ptr<substackable> &next_state) mutable
+				{
+					if (iterator == data.end()) return step_break;
+					context.stack.push_back(std::make_unique<scan_root_stackable>(*iterator));
+					++iterator;
+					return step_push;
+				});
+		}
+		else return step_break;
+		return step_continue;
+	}
+	
+	step_result begin_subtransform(scan_context &context, std::unique_ptr<substackable> &next_state)
+	{
+		auto temp = std::move(next_state);
+		next_state = std::make_unique<substackable>(
+			[this, iterator = context.transform_stack.back()->subtransforms.begin()](
+				scan_context &context, 
+				step_result last_result, 
+				std::unique_ptr<substackable> &next_state) mutable
+			{
+				if (last_result != step_continue)
+					context.transform_stack.pop_back();
+				if (iterator == context.transform_stack.back()->subtransforms.end()) 
+				{
+					return begin_recurse(next_state);
+				}
+				context.transform_stack.push_back(iterator->get());
+				context.stack.push_back(std::make_unique<scan_root_stackable>(root));
+				++iterator;
+				return step_push;
+			});
+		return step_continue;
+	}
+
+	std::unique_ptr<substackable> state;
+
+	scan_root_stackable(std::shared_ptr<luxem::value> &root) : root(root) 
+	{
+		state = std::make_unique<substackable>(
+			[this, matches = match_map()](
+				scan_context &context, 
+				step_result last_result, 
+				std::unique_ptr<substackable> &next_state) mutable
+			{
+				// Start by scanning root
+				if (last_result == step_push)
+				{
+					if (context.verbose) 
+						std::cerr << "Scanning " << this->root->get_name() << std::endl;
+					if (!context.get_from()) 
+						throw std::runtime_error("Transform missing 'from' pattern.");
+					last_result = scan_node(context, matches, this->root, context.get_from());
+					if (last_result == step_push) return step_push;
+				}
+
+				// Scan finished, transform if successful
+				if (last_result == step_fail) 
+				{
+					if (context.verbose) 
+						std::cerr << "Failed to match " << this->root->get_name() << std::endl;
+				}
+				else
+				{
+					if (context.verbose) 
+						std::cerr << "Matched " << this->root->get_name() << std::endl;
+					if (context.get_to())
+						transform_root(matches, this->root, context.get_to(), context.verbose);
+					return begin_subtransform(context, next_state);
+					return step_continue;
+				}
+
+				return begin_recurse(next_state);
+			});
+	}
 
 	step_result step(scan_context &context, step_result last_result) override
-	{
-		if (!iterate)
-		{
-			// Start by scanning root
-			if (last_result == step_push)
-			{
-				assert(!iterate);
-				if (context.verbose) std::cerr << "Scanning " << root->get_name() << std::endl;
-				last_result = scan_node(context, matches, root, context.reverse ? context.to : context.from);
-				if (last_result == step_push) return step_push;
-			}
-
-			// Scan finished, transform if successful
-			if (last_result == step_fail) 
-			{
-				if (context.verbose) std::cerr << "Failed to match " << root->get_name() << std::endl;
-			}
-			else
-			{
-				if (context.verbose) std::cerr << "Matched " << root->get_name() << ", transforming" << std::endl;
-				transform_root(matches, root, context.reverse ? context.from : context.to, context.verbose);
-				matches.clear();
-			}
-
-			// If root is recursible, switch to that state
-			if (root->is<luxem::object>())
-			{
-				auto &data = root->as<luxem::object>().get_data();
-				iterate = [this, &data, iterator = data.begin()](scan_context &context) mutable
-				{
-					if (iterator == data.end()) return false;
-					context.stack.push_back(std::make_unique<root_scan_stackable>(iterator->second));
-					++iterator;
-					return true;
-				};
-			}
-			else if (root->is<luxem::array>())
-			{
-				auto &data = root->as<luxem::array>().get_data();
-				iterate = [this, &data, iterator = data.begin()](scan_context &context) mutable
-				{
-					if (iterator == data.end()) return false;
-					context.stack.push_back(std::make_unique<root_scan_stackable>(*iterator));
-					++iterator;
-					return true;
-				};
-			}
-			else return step_break;
-		}
-
-		if (iterate(context)) return step_push;
-		else return step_break;
-	}
+		{ return state->callback(context, last_result, state); }
 };
 
 struct object_scan_stackable : scan_stackable
@@ -658,51 +721,67 @@ namespace luxemog
 {
 
 transform::transform(std::shared_ptr<luxem::value> &&data, bool verbose) : 
-	verbose(verbose)
+	verbose(verbose), data(std::move(data))
+{
+}
+
+transform::transform_data::transform_data(std::shared_ptr<luxem::value> &&data)
 {
 	auto &object = data->as<luxem::reader::object_context>();
 	
-	auto context = std::make_shared<build_context>();
-
-	object.element("matches", [this, context](std::shared_ptr<luxem::value> &&data)
 	{
-		data->as<luxem::reader::array_context>().element([this, context](std::shared_ptr<luxem::value> &&data)
+		auto context = std::make_shared<build_context>();
+
+		object.build_struct(
+			"from", 
+			[this](std::shared_ptr<luxem::value> &&data) { from = std::move(data); }, 
+			[context](std::string const &, std::shared_ptr<luxem::value> &data)
+			{ 
+				build_preprocess(*context, data); 
+			}
+		);
+
+		object.build_struct(
+			"to", 
+			[this](std::shared_ptr<luxem::value> &&data) { to = std::move(data); }, 
+			[context](std::string const &, std::shared_ptr<luxem::value> &data)
+			{ 
+				build_preprocess(*context, data); 
+			}
+		);
+
+		object.element("matches", [this, context](std::shared_ptr<luxem::value> &&data)
 		{
-			if (!build_special(*context, data)) 
-				throw std::runtime_error("Only specials may be defined in 'matches'.");
+			data->as<luxem::reader::array_context>().element([this, context](std::shared_ptr<luxem::value> &&data)
+			{
+				if (!build_special(*context, data)) 
+					throw std::runtime_error("Only specials may be defined in 'matches'.");
+			});
 		});
-	});
+	}
 
-	object.build_struct(
-		"from", 
-		[this](std::shared_ptr<luxem::value> &&data) { from = std::move(data); }, 
-		[context](std::string const &, std::shared_ptr<luxem::value> &data)
-		{ 
-			build_preprocess(*context, data); 
-		}
-	);
-
-	object.build_struct(
-		"to", 
-		[this](std::shared_ptr<luxem::value> &&data) { to = std::move(data); }, 
-		[context](std::string const &, std::shared_ptr<luxem::value> &data)
-		{ 
-			build_preprocess(*context, data); 
+	object.element(
+		"subtransforms",
+		[this](std::shared_ptr<luxem::value> &&data) 
+		{
+			data->as<luxem::reader::array_context>().element([this](std::shared_ptr<luxem::value> &&data)
+				{ subtransforms.emplace_back(std::make_unique<transform_data>(std::move(data))); });
 		}
 	);
 }
 
 void transform::apply(std::shared_ptr<luxem::value> &target, bool reverse)
 {
-	scan_context context{verbose, reverse, from, to};
+	scan_context context{verbose, reverse};
+	context.transform_stack.push_back(&data);
+	context.stack.push_back(std::make_unique<scan_root_stackable>(target));
 
-	size_t count = 0;
-	context.stack.push_back(std::make_unique<root_scan_stackable>(target));
+	size_t count = 0; // DEBUG
 	step_result last_result = step_push;
 	while (!context.stack.empty())
 	{
-		++count;
-		if (count > 1000) assert(false);
+		++count; // DEBUG
+		if (count > 1000) assert(false); // DEBUG
 		last_result = context.stack.back()->step(context, last_result);
 		switch (last_result)
 		{

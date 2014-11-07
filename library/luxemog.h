@@ -11,11 +11,17 @@ struct transform
 	transform(std::shared_ptr<luxem::value> &&root, bool verbose = false);
 	void apply(std::shared_ptr<luxem::value> &target, bool reverse = false);
 
+	struct transform_data // Internal only, basically private
+	{
+		transform_data(std::shared_ptr<luxem::value> &&root);
+		std::shared_ptr<luxem::value> from, to;
+		std::list<std::unique_ptr<transform_data>> subtransforms;
+	};
+
 	private:
 		bool verbose;
-		std::shared_ptr<luxem::value> from, to;
-		bool from_can_be_from;
-		bool to_can_be_from;
+
+		transform_data data;
 };
 
 struct transform_list
