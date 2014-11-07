@@ -87,9 +87,8 @@ void test(std::string const &transform_source, std::string const &source, std::s
 	compare_value(*working_tree, *expected_tree);
 }
 
-int main(void)
+void test_primitives(void)
 {
-	// Vanilla matching
 	test
 	(
 		"["
@@ -130,12 +129,64 @@ int main(void)
 	(
 		"["
 			"{"
+				"from: (int) 327,"
+				"to: (dog) 33,"
+			"},"
+		"]",
+		"327",
+		"327"
+	);
+	
+	test
+	(
+		"["
+			"{"
+				"from: 3838,"
+				"to: 94,"
+			"},"
+		"]",
+		"(int) 3838",
+		"(int) 3838"
+	);
+	
+}
+
+void test_objects(void)
+{
+	test
+	(
+		"["
+			"{"
 				"from: {},"
 				"to: 7,"
 			"},"
 		"]",
 		"{}",
 		"7"
+	);
+
+	test
+	(
+		"["
+			"{"
+				"from: (int) {},"
+				"to: 7,"
+			"},"
+		"]",
+		"(int) {}",
+		"7"
+	);
+	
+	test
+	(
+		"["
+			"{"
+				"from: (int) {},"
+				"to: 7,"
+			"},"
+		"]",
+		"(qog) {}",
+		"(qog) {}"
 	);
 	
 	test
@@ -173,7 +224,10 @@ int main(void)
 		"{key: val}",
 		"{key: val}"
 	);
-	
+}
+
+void test_arrays(void)
+{
 	test
 	(
 		"["
@@ -184,6 +238,30 @@ int main(void)
 		"]",
 		"[]",
 		"9"
+	);
+	
+	test
+	(
+		"["
+			"{"
+				"from: (int) [],"
+				"to: 7,"
+			"},"
+		"]",
+		"(int) []",
+		"7"
+	);
+	
+	test
+	(
+		"["
+			"{"
+				"from: (int) [],"
+				"to: 7,"
+			"},"
+		"]",
+		"(qog) []",
+		"(qog) []"
 	);
 	
 	test
@@ -209,8 +287,10 @@ int main(void)
 		"[2, 5]",
 		"[2, 5]"
 	);
-	
-	// Wildcard matching
+}
+
+void test_wildcards(void)
+{
 	test
 	(
 		"["
@@ -222,8 +302,10 @@ int main(void)
 		"4",
 		"5"
 	);
+}
 
-	// *match matching
+void test_match(void)
+{
 	test
 	(
 		"["
@@ -266,7 +348,10 @@ int main(void)
 		"5"
 	);
 	
-	// *match and wildcard matching
+}
+
+void test_match_with_wildcard(void)
+{
 	test
 	(
 		"["
@@ -296,8 +381,10 @@ int main(void)
 			"28,"
 		"]"
 	);
+}
 
-	// *error
+void test_errors(void)
+{
 	try
 	{
 		test
@@ -314,8 +401,10 @@ int main(void)
 		assert(false);
 	}
 	catch (std::runtime_error &error) {}
+}
 
-	// *alt
+void test_alts(void)
+{
 	test
 	(
 		"["
@@ -340,7 +429,44 @@ int main(void)
 		"2"
 	);
 
-	// subtransforms
+	test
+	(
+		"["
+			"{"
+				"from: (*alt) ["
+					"[(*match) nomatch, 4],"
+					"[22, 5],"
+				"],"
+				"to: (*match) nomatch,"
+			"},"
+		"]",
+		"[22, 4]",
+		"22"
+	);
+	
+	try
+	{
+		test
+		(
+			"["
+				"{"
+					"from: (*alt) ["
+						"[(*match) nomatch, 4],"
+						"[22, 5],"
+					"],"
+					"to: (*match) nomatch,"
+				"},"
+			"]",
+			"[22, 5]",
+			"IGNORED"
+		);
+		assert(false);
+	}
+	catch (std::runtime_error &error) {}
+}
+
+void test_subtransforms(void)
+{
 	test
 	(
 		"["
@@ -374,6 +500,77 @@ int main(void)
 		"{y: 7}",
 		"{y: 7}"
 	);
+}
+
+void test_regexes(void)
+{
+	test
+	(
+		"["
+			"{"
+				"from: (*regex) \"[[:digit:]]\","
+				"to: 5,"
+			"},"
+		"]",
+		"4",
+		"5"
+	);
+	
+	test
+	(
+		"["
+			"{"
+				"from: (*regex) \"[[:digit:]]\","
+				"to: 5,"
+			"},"
+		"]",
+		"a",
+		"a"
+	);
+	
+	test
+	(
+		"["
+			"{"
+				"from: (*type_regex) {"
+					"exp: [\"[[:digit:]]\"],"
+					"value: (*wild),"
+				"},"
+				"to: 5,"
+			"},"
+		"]",
+		"(4) lemonade",
+		"5"
+	);
+	
+	test
+	(
+		"["
+			"{"
+				"from: (*type_regex) {"
+					"exp: [\"[[:digit:]]\"],"
+					"value: (*wild),"
+				"},"
+				"to: 5,"
+			"},"
+		"]",
+		"(a) asparagus",
+		"(a) asparagus"
+	);
+}
+
+int main(void)
+{
+	test_primitives();
+	test_objects();
+	test_arrays();
+	test_wildcards();
+	test_match();
+	test_match_with_wildcard();
+	test_errors();
+	test_alts();
+	test_subtransforms();
+	test_regexes();
 
 	return 0;
 }

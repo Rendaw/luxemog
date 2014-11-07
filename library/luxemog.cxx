@@ -2,8 +2,19 @@
 
 #include <sstream>
 #include <iostream>
+#include <regex>
 
-typedef std::map<std::string, std::shared_ptr<luxem::value>> match_map;
+struct match_map
+{
+	std::map<std::string, std::shared_ptr<luxem::value>> trees;
+	std::map<std::string, std::string> strings;
+
+	void update(match_map &other)
+	{
+		other.trees.insert(trees.begin(), trees.end());
+		other.strings.insert(strings.begin(), strings.end());
+	}
+};
 
 enum step_result
 {
@@ -57,7 +68,8 @@ step_result scan_node(
 	scan_context &context,
 	match_map &matches,
 	std::shared_ptr<luxem::value> &target,
-	std::shared_ptr<luxem::value> const &from);
+	std::shared_ptr<luxem::value> const &from,
+	bool ignore_type = false);
 
 std::shared_ptr<luxem::value> transform_node(
 	transform_context &context, 
@@ -87,6 +99,155 @@ struct special : luxem::value
 
 std::string const special::name("special");
 
+struct regex_definition
+{
+	bool has_id = false;
+	std::string id;
+	std::regex regex;
+	bool has_replace = false;
+	std::string replace;
+
+	regex_definition(std::shared_ptr<luxem::value> &&data)
+	{
+		if (data->is<luxem::primitive>()) regex = data->as<luxem::primitive>().get_primitive();
+		else if (data->is<luxem::reader::object_context>())
+		{
+			auto &object = data->as<luxem::reader::object_context>();
+			auto has_pattern = std::make_shared<bool>(false);
+			object.element("id", [this](std::shared_ptr<luxem::value> &&data) 
+				{ id = data->as<luxem::primitive>().get_string(); has_id = true; });
+			object.element("exp", [this, has_pattern](std::shared_ptr<luxem::value> &&data) 
+				{ regex = data->as<luxem::primitive>().get_string(); *has_pattern = true; });
+			object.element("replace", [this](std::shared_ptr<luxem::value> &&data) 
+				{ replace = data->as<luxem::primitive>().get_string(); has_replace = true; });
+			object.finally([this, has_pattern](void)
+			{
+				if (!*has_pattern) 
+					throw std::runtime_error("Regex missing pattern.");
+				if (!has_replace && (regex.mark_count() > 1)) 
+					throw std::runtime_error("Regex patterns must have at most 1 marked subexpression.");
+				if (has_replace && !has_id) 
+					throw std::runtime_error("Substitution regexes must have an id.");
+			});
+		}
+		else throw std::runtime_error("A regex pattern must be a primitive or object.");
+	}
+
+	bool test(std::string const &source, match_map &matches)
+	{
+		if (has_id)
+		{
+			auto found = matches.strings.find(id);
+			if (found != matches.strings.end())
+			{
+				std::stringstream message;
+				message << "Match " << id << " stored multiple times.  Matches must only occur once.";
+				throw std::runtime_error(message.str());
+			}
+		}
+		std::smatch results;
+		if (has_replace)
+		{
+			matches.strings.emplace(
+				id, 
+				std::regex_replace(source, regex, replace));
+		}
+		else
+		{
+			if (!std::regex_search(source, results, regex)) return false;
+			matches.strings.emplace(
+				id, 
+				regex.mark_count() > 0 ? results.str(1) : results.str(0));
+		}
+		return true;
+	}
+};
+
+struct regex_definition_list
+{
+	std::list<std::unique_ptr<regex_definition>> patterns;
+
+	void deserialize(std::shared_ptr<luxem::value> &&data)
+	{
+		if (data->is<luxem::primitive>()) 
+			patterns.emplace_back(std::make_unique<regex_definition>(std::move(data)));
+		else if (data->is<luxem::reader::array_context>())
+			data->as<luxem::reader::array_context>().element(
+				[this](std::shared_ptr<luxem::value> &&data)
+					{ patterns.emplace_back(std::make_unique<regex_definition>(std::move(data))); });
+		else throw std::runtime_error("A regex must be a primitive or array.");
+	}
+	
+	bool test(std::string const &source, match_map &matches)
+	{
+		for (auto &pattern : patterns)
+			if (!pattern->test(source, matches)) return false;
+		return true;
+	}
+};
+
+struct type_regex : special
+{
+	static std::string const name;
+	std::string const &get_name(void) const override { return name; }
+	
+	regex_definition_list type_definition;
+	std::shared_ptr<luxem::value> value;
+
+	type_regex(build_context &context, std::shared_ptr<luxem::value> &&data)
+	{
+		auto &object = data->as<luxem::reader::object_context>();
+		object.element(
+			"exp",
+			[this](std::shared_ptr<luxem::value> &&data)
+				{ type_definition.deserialize(std::move(data)); });
+		object.build_struct(
+			"value",
+			[this](std::shared_ptr<luxem::value> &&data)
+			{ 
+				value = std::move(data); 
+				if (value->has_type()) 
+					throw std::runtime_error("*type_regex 'value' must not have a type.");
+			},
+			[this, &context](std::string const &, std::shared_ptr<luxem::value> &data)
+				{ build_preprocess(context, data); });
+	}
+
+	step_result scan(scan_context &context, match_map &matches, std::shared_ptr<luxem::value> &target) override
+	{
+		if (!target->has_type()) return step_fail;
+		if (!type_definition.test(target->get_type(), matches)) return step_fail;
+		return scan_node(context, matches, target, value, true);
+	}
+	
+	std::shared_ptr<luxem::value> generate(transform_context &context, match_map const &matches) override
+		{ throw std::runtime_error("*type_regex cannot be used in 'to' patterns."); }
+};
+
+std::string const type_regex::name("*type_regex");
+
+struct regex : special
+{
+	static std::string const name;
+	std::string const &get_name(void) const override { return name; }
+
+	regex_definition_list value_definition;
+
+	regex(std::shared_ptr<luxem::value> &&data) 
+		{ value_definition.deserialize(std::move(data)); }
+
+	step_result scan(scan_context &context, match_map &matches, std::shared_ptr<luxem::value> &target) override
+	{
+		if (!value_definition.test(target->as<luxem::primitive>().get_primitive(), matches)) return step_fail;
+		return step_break;
+	}
+	
+	std::shared_ptr<luxem::value> generate(transform_context &context, match_map const &matches) override
+		{ throw std::runtime_error("*regex cannot be used in 'to' patterns."); }
+};
+
+std::string const regex::name("*regex");
+
 struct alternate : special
 {
 	static std::string const name;
@@ -112,6 +273,7 @@ struct alternate : special
 		struct stackable : scan_stackable
 		{
 			match_map &matches;
+			match_map branch_matches;
 			std::vector<std::shared_ptr<luxem::value>> &patterns;
 			std::vector<std::shared_ptr<luxem::value>>::iterator iterator;
 			std::shared_ptr<luxem::value> &target;
@@ -128,9 +290,14 @@ struct alternate : special
 
 			step_result step(scan_context &context, step_result last_result) override
 			{
-				if (last_result == step_break) return step_break;
+				if (last_result == step_break) 
+				{
+					branch_matches.update(matches);
+					return step_break;
+				}
 				if (iterator == patterns.end()) return step_fail;
-				auto result = scan_node(context, matches, target, *iterator);
+				branch_matches = matches;
+				auto result = scan_node(context, branch_matches, target, *iterator);
 				if (result == step_break) return step_break;
 				++iterator;
 				return step_continue;
@@ -227,15 +394,15 @@ struct match_definition
 				}
 				if (last_result == step_fail) return step_fail;
 
-				auto found = matches.find(id);
-				if (found != matches.end())
+				auto found = matches.trees.find(id);
+				if (found != matches.trees.end())
 				{
 					std::stringstream message;
-					message << "Match " << id << " matched multiple times.  Matches must only occur once.";
+					message << "Match " << id << " stored multiple times.  Matches must only occur once.";
 					throw std::runtime_error(message.str());
 				}
 				if (context.verbose) std::cerr << "Saving match " << id << std::endl;
-				matches.emplace(id, target);
+				matches.trees.emplace(id, target);
 				return last_result;
 			}
 		};
@@ -246,8 +413,8 @@ struct match_definition
 
 	std::shared_ptr<luxem::value> generate(transform_context &context, match_map const &matches)
 	{
-		auto found = matches.find(id);
-		if (found == matches.end())
+		auto found = matches.trees.find(id);
+		if (found == matches.trees.end())
 		{
 			std::stringstream message;
 			message << "Match " << id << ", required by output, is missing.";
@@ -452,21 +619,31 @@ step_result scan_node(
 	scan_context &context, 
 	match_map &matches, 
 	std::shared_ptr<luxem::value> &target,
-	std::shared_ptr<luxem::value> const &from)
+	std::shared_ptr<luxem::value> const &from,
+	bool ignore_type)
 {
 	if (context.verbose) std::cerr << "Comparing " << target->get_name() << " to " << from->get_name() << std::endl;
+
+	auto check_type = [&](void)
+	{
+		if (ignore_type) return true;
+		if (target->has_type() != from->has_type()) return false;
+		if (from->has_type() && (target->get_type() != from->get_type())) return false;
+		return true;
+	};
+
 	if (from->is<luxem::primitive>())
 	{
+		if (!check_type()) return step_fail;
 		if (!target->is<luxem::primitive>()) return step_fail;
 		auto &from_resolved = from->as<luxem::primitive>();
 		auto &target_resolved = target->as<luxem::primitive>();
-		if (target_resolved.has_type() != from_resolved.has_type()) return step_fail;
-		if (from_resolved.has_type() && (target_resolved.get_type() != from_resolved.get_type())) return step_fail;
 		if (target_resolved.get_primitive() != from_resolved.get_primitive()) return step_fail;
 		return step_break;
 	}
 	else if (from->is<luxem::object>())
 	{
+		if (!check_type()) return step_fail;
 		if (!target->is<luxem::object>()) return step_fail;
 		auto &from_resolved = from->as<luxem::object>();
 		auto &target_resolved = target->as<luxem::object>();
@@ -479,6 +656,7 @@ step_result scan_node(
 	}
 	else if (from->is<luxem::array>())
 	{
+		if (!check_type()) return step_fail;
 		if (!target->is<luxem::array>()) return step_fail;
 		auto &from_resolved = from->as<luxem::array>();
 		auto &target_resolved = target->as<luxem::array>();
@@ -663,6 +841,14 @@ bool build_special(build_context &context, std::shared_ptr<luxem::value> &data)
 	{
 		auto &array_data = data->as<luxem::reader::array_context>();
 		data = std::make_shared<alternate>(context, array_data);
+	}
+	else if (data->get_type() == "*type_regex")
+	{
+		data = std::make_shared<type_regex>(context, std::move(data));
+	}
+	else if (data->get_type() == "*regex")
+	{
+		data = std::make_shared<regex>(std::move(data));
 	}
 	else if (data->get_type() == "*error")
 	{
