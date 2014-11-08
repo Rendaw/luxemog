@@ -146,7 +146,6 @@ std::string format_string(std::string const &pattern, match_map const &matches)
 
 	parse([&](char const *chunk, size_t chunk_length, bool literal)
 	{
-		std::cout << "Chunk '" << std::string(chunk, chunk_length) << "', len " << chunk_length << ", literal " << literal << std::endl;
 		if (literal) expected_length += chunk_length;
 		else
 		{
