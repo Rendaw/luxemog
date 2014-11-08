@@ -99,6 +99,145 @@ struct special : luxem::value
 
 std::string const special::name("special");
 
+std::string format_string(std::string const &pattern, match_map const &matches)
+{
+	auto parse = [&pattern](auto callback)
+	{
+		size_t offset = 0;
+		char const *run_start = &pattern[0];
+		size_t run_length = 0;
+		bool literal = true;
+		auto end = [&](void)
+		{
+			callback(run_start, run_length, literal);
+			run_start = &pattern[offset];
+			run_length = 0;
+		};
+		bool escape = false;
+		while (offset < pattern.size())
+		{
+			auto const next = pattern[offset++];
+			if (literal && !escape && (next == '<'))
+			{
+				end();
+				literal = false;
+			}
+			else if (!literal && (next == '>'))
+			{
+				end();
+				literal = true;
+			}
+			else if (literal && !escape && (next == '%'))
+			{
+				end();
+				escape = true;
+			}
+			else
+			{
+				run_length += 1;
+				escape = false;
+			}
+		}
+		end();
+	};
+
+	size_t expected_length = 0;
+	std::list<std::string const *> references;
+
+	parse([&](char const *chunk, size_t chunk_length, bool literal)
+	{
+		std::cout << "Chunk '" << std::string(chunk, chunk_length) << "', len " << chunk_length << ", literal " << literal << std::endl;
+		if (literal) expected_length += chunk_length;
+		else
+		{
+			std::string key(chunk, chunk_length);
+			auto found = matches.strings.find(key);
+			if (found == matches.strings.end()) 
+			{
+				std::stringstream message;
+				message << "Missing saved value for key '" << key << "'.";
+				throw std::runtime_error(message.str());
+			}
+			expected_length += found->second.size();
+			references.push_back(&found->second);
+		}
+	});
+
+	{
+		std::vector<char> out;
+		out.resize(expected_length);
+		auto ref_iterator = references.begin();
+		size_t offset = 0;
+		parse([&](char const *chunk, size_t chunk_length, bool literal)
+		{
+			if (literal) 
+			{
+				memcpy(&out[offset], chunk, chunk_length);
+				offset += chunk_length;
+			}
+			else
+			{
+				memcpy(&out[offset], (*ref_iterator)->c_str(), (*ref_iterator)->size());
+				offset += (*ref_iterator)->size();
+			}
+		});
+		return std::string(&out[0], out.size());
+	}
+}
+
+struct build_type : special
+{
+	static std::string const name;
+	std::string const &get_name(void) const override { return name; }
+
+	std::string format;
+	std::shared_ptr<luxem::value> value;
+
+	build_type(build_context &context, std::shared_ptr<luxem::value> &&data)
+	{ 
+		auto &object = data->as<luxem::reader::object_context>();
+		object.element("format", [this](std::shared_ptr<luxem::value> &&data) 
+			{ format = data->as<luxem::primitive>().get_string(); });
+		object.build_struct(
+			"value", 
+			[this](std::shared_ptr<luxem::value> &&data) 
+				{ value = std::move(data); },
+			[this, &context](std::string const &, std::shared_ptr<luxem::value> &data)
+				{ build_preprocess(context, data); });
+	}
+
+	step_result scan(scan_context &context, match_map &matches, std::shared_ptr<luxem::value> &target) override
+		{ throw std::runtime_error("*type cannot be used in 'from' patterns."); }
+	
+	std::shared_ptr<luxem::value> generate(transform_context &context, match_map const &matches) override
+	{ 
+		auto out = transform_node(context, matches, value);
+		out->set_type(format_string(format, matches));
+		return out;
+	}
+};
+
+std::string const build_type::name("*type");
+
+struct build_string : special
+{
+	static std::string const name;
+	std::string const &get_name(void) const override { return name; }
+
+	std::string format;
+
+	build_string(std::shared_ptr<luxem::value> &&data)
+		{ format = data->as<luxem::primitive>().get_string(); }
+
+	step_result scan(scan_context &context, match_map &matches, std::shared_ptr<luxem::value> &target) override
+		{ throw std::runtime_error("*string cannot be used in 'from' patterns."); }
+	
+	std::shared_ptr<luxem::value> generate(transform_context &context, match_map const &matches) override
+		{ return std::make_shared<luxem::primitive>(format_string(format, matches)); }
+};
+
+std::string const build_string::name("*string");
+
 struct regex_definition
 {
 	bool has_id = false;
@@ -169,13 +308,13 @@ struct regex_definition_list
 
 	void deserialize(std::shared_ptr<luxem::value> &&data)
 	{
-		if (data->is<luxem::primitive>()) 
+		if (data->is<luxem::primitive>() || data->is<luxem::reader::object_context>())
 			patterns.emplace_back(std::make_unique<regex_definition>(std::move(data)));
 		else if (data->is<luxem::reader::array_context>())
 			data->as<luxem::reader::array_context>().element(
 				[this](std::shared_ptr<luxem::value> &&data)
 					{ patterns.emplace_back(std::make_unique<regex_definition>(std::move(data))); });
-		else throw std::runtime_error("A regex must be a primitive or array.");
+		else assert(false);
 	}
 	
 	bool test(std::string const &source, match_map &matches)
@@ -185,6 +324,28 @@ struct regex_definition_list
 		return true;
 	}
 };
+
+struct regex : special
+{
+	static std::string const name;
+	std::string const &get_name(void) const override { return name; }
+
+	regex_definition_list value_definition;
+
+	regex(std::shared_ptr<luxem::value> &&data) 
+		{ value_definition.deserialize(std::move(data)); }
+
+	step_result scan(scan_context &context, match_map &matches, std::shared_ptr<luxem::value> &target) override
+	{
+		if (!value_definition.test(target->as<luxem::primitive>().get_primitive(), matches)) return step_fail;
+		return step_break;
+	}
+	
+	std::shared_ptr<luxem::value> generate(transform_context &context, match_map const &matches) override
+		{ throw std::runtime_error("*regex cannot be used in 'to' patterns."); }
+};
+
+std::string const regex::name("*regex");
 
 struct type_regex : special
 {
@@ -225,28 +386,6 @@ struct type_regex : special
 };
 
 std::string const type_regex::name("*type_regex");
-
-struct regex : special
-{
-	static std::string const name;
-	std::string const &get_name(void) const override { return name; }
-
-	regex_definition_list value_definition;
-
-	regex(std::shared_ptr<luxem::value> &&data) 
-		{ value_definition.deserialize(std::move(data)); }
-
-	step_result scan(scan_context &context, match_map &matches, std::shared_ptr<luxem::value> &target) override
-	{
-		if (!value_definition.test(target->as<luxem::primitive>().get_primitive(), matches)) return step_fail;
-		return step_break;
-	}
-	
-	std::shared_ptr<luxem::value> generate(transform_context &context, match_map const &matches) override
-		{ throw std::runtime_error("*regex cannot be used in 'to' patterns."); }
-};
-
-std::string const regex::name("*regex");
 
 struct alternate : special
 {
@@ -842,13 +981,21 @@ bool build_special(build_context &context, std::shared_ptr<luxem::value> &data)
 		auto &array_data = data->as<luxem::reader::array_context>();
 		data = std::make_shared<alternate>(context, array_data);
 	}
+	else if (data->get_type() == "*regex")
+	{
+		data = std::make_shared<regex>(std::move(data));
+	}
 	else if (data->get_type() == "*type_regex")
 	{
 		data = std::make_shared<type_regex>(context, std::move(data));
 	}
-	else if (data->get_type() == "*regex")
+	else if (data->get_type() == "*string")
 	{
-		data = std::make_shared<regex>(std::move(data));
+		data = std::make_shared<build_string>(std::move(data));
+	}
+	else if (data->get_type() == "*type")
+	{
+		data = std::make_shared<build_type>(context, std::move(data));
 	}
 	else if (data->get_type() == "*error")
 	{

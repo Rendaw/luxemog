@@ -559,6 +559,60 @@ void test_regexes(void)
 	);
 }
 
+void test_format(void)
+{
+	test
+	(
+		"["
+			"{"
+				"from: (*regex) {id: g, exp: .*},"
+				"to: (*string) \"<g>4\","
+			"},"
+		"]",
+		"\"hello friend\"",
+		"\"hello friend4\""
+	);
+
+	test
+	(
+		"["
+			"{"
+				"from: (*wild),"
+				"to: (*string) \"%<g>4\","
+			"},"
+		"]",
+		"frog",
+		"<g>4"
+	);
+	
+	test
+	(
+		"["
+			"{"
+				"from: (*regex) {id: goose, exp: .*},"
+				"to: (*string) \"%%<goose> berry\","
+			"},"
+		"]",
+		"frog",
+		"\"%frog berry\""
+	);
+
+	test
+	(
+		"["
+			"{"
+				"from: (*wild),"
+				"to: (*type) {"
+					"format: \"dog adhesive\","
+					"value: [],"
+				"},"
+			"},"
+		"]",
+		"IGNORE",
+		"(dog adhesive) []"
+	);
+}
+
 int main(void)
 {
 	test_primitives();
@@ -571,6 +625,7 @@ int main(void)
 	test_alts();
 	test_subtransforms();
 	test_regexes();
+	test_format();
 
 	return 0;
 }
