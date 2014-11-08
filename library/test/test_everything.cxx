@@ -533,7 +533,7 @@ void test_regexes(void)
 		"["
 			"{"
 				"from: (*type_regex) {"
-					"exp: [\"[[:digit:]]\"],"
+					"type: [\"[[:digit:]]\"],"
 					"value: (*wild),"
 				"},"
 				"to: 5,"
@@ -548,7 +548,7 @@ void test_regexes(void)
 		"["
 			"{"
 				"from: (*type_regex) {"
-					"exp: [\"[[:digit:]]\"],"
+					"type: [\"[[:digit:]]\"],"
 					"value: (*wild),"
 				"},"
 				"to: 5,"
@@ -603,13 +603,25 @@ void test_format(void)
 			"{"
 				"from: (*wild),"
 				"to: (*type) {"
-					"format: \"dog adhesive\","
+					"type: \"dog adhesive\","
 					"value: [],"
 				"},"
 			"},"
 		"]",
 		"IGNORE",
 		"(dog adhesive) []"
+	);
+	
+	test
+	(
+		"["
+			"{"
+				"from: (*regex) {id: lovely, exp: \"e\", sub: \"o\"},"
+				"to: (*string) <lovely>,"
+			"},"
+		"]",
+		"\"emblem peaches\"",
+		"\"omblom poachos\""
 	);
 }
 

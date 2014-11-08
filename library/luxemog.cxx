@@ -195,7 +195,7 @@ struct build_type : special
 	build_type(build_context &context, std::shared_ptr<luxem::value> &&data)
 	{ 
 		auto &object = data->as<luxem::reader::object_context>();
-		object.element("format", [this](std::shared_ptr<luxem::value> &&data) 
+		object.element("type", [this](std::shared_ptr<luxem::value> &&data) 
 			{ format = data->as<luxem::primitive>().get_string(); });
 		object.build_struct(
 			"value", 
@@ -239,8 +239,13 @@ std::string const build_string::name("*string");
 
 struct regex_definition
 {
-	bool has_id = false;
-	std::string id;
+	struct id
+	{
+		bool valid;
+		std::string text;
+		id(bool valid, std::string const &text) : valid(valid), text(text) {}
+	};
+	std::vector<id> ids;
 	std::regex regex;
 	bool has_replace = false;
 	std::string replace;
@@ -253,19 +258,28 @@ struct regex_definition
 			auto &object = data->as<luxem::reader::object_context>();
 			auto has_pattern = std::make_shared<bool>(false);
 			object.element("id", [this](std::shared_ptr<luxem::value> &&data) 
-				{ id = data->as<luxem::primitive>().get_string(); has_id = true; });
+				{ ids.emplace_back(true, data->as<luxem::primitive>().get_string()); });
+			object.element("ids", [this](std::shared_ptr<luxem::value> &&data) 
+			{ 
+				data->as<luxem::reader::array_context>().element([this](std::shared_ptr<luxem::value> &&data)
+				{ 
+					if (data->has_type() && (data->get_type() == "null"))
+						ids.emplace_back(false, std::string{});
+					else ids.emplace_back(true, data->as<luxem::primitive>().get_string()); 
+				});
+			});
 			object.element("exp", [this, has_pattern](std::shared_ptr<luxem::value> &&data) 
 				{ regex = data->as<luxem::primitive>().get_string(); *has_pattern = true; });
-			object.element("replace", [this](std::shared_ptr<luxem::value> &&data) 
+			object.element("sub", [this](std::shared_ptr<luxem::value> &&data) 
 				{ replace = data->as<luxem::primitive>().get_string(); has_replace = true; });
 			object.finally([this, has_pattern](void)
 			{
 				if (!*has_pattern) 
 					throw std::runtime_error("Regex missing pattern.");
-				if (!has_replace && (regex.mark_count() > 1)) 
-					throw std::runtime_error("Regex patterns must have at most 1 marked subexpression.");
-				if (has_replace && !has_id) 
-					throw std::runtime_error("Substitution regexes must have an id.");
+				if (!has_replace && (regex.mark_count() > ids.size())) 
+					throw std::runtime_error("Regex has more ids than marked subexpressions.");
+				if (has_replace && ((ids.size() != 1) || !ids[0].valid)) 
+					throw std::runtime_error("Substitution regexes must have one id.");
 			});
 		}
 		else throw std::runtime_error("A regex pattern must be a primitive or object.");
@@ -273,29 +287,14 @@ struct regex_definition
 
 	bool test(std::string const &source, match_map &matches)
 	{
-		if (has_id)
-		{
-			auto found = matches.strings.find(id);
-			if (found != matches.strings.end())
-			{
-				std::stringstream message;
-				message << "Match " << id << " stored multiple times.  Matches must only occur once.";
-				throw std::runtime_error(message.str());
-			}
-		}
-		std::smatch results;
 		if (has_replace)
-		{
-			matches.strings.emplace(
-				id, 
-				std::regex_replace(source, regex, replace));
-		}
+			matches.strings.emplace(ids[0].text, std::regex_replace(source, regex, replace));
 		else
 		{
+			std::smatch results;
 			if (!std::regex_search(source, results, regex)) return false;
-			matches.strings.emplace(
-				id, 
-				regex.mark_count() > 0 ? results.str(1) : results.str(0));
+			for (size_t index = 0; index < ids.size(); ++index)
+				if (ids[index].valid) matches.strings.emplace(ids[index].text, results.str(index));
 		}
 		return true;
 	}
@@ -353,30 +352,31 @@ struct type_regex : special
 	
 	regex_definition_list type_definition;
 	std::shared_ptr<luxem::value> value;
+	bool allow_missing = false;
 
 	type_regex(build_context &context, std::shared_ptr<luxem::value> &&data)
 	{
 		auto &object = data->as<luxem::reader::object_context>();
 		object.element(
-			"exp",
+			"type",
 			[this](std::shared_ptr<luxem::value> &&data)
 				{ type_definition.deserialize(std::move(data)); });
 		object.build_struct(
 			"value",
 			[this](std::shared_ptr<luxem::value> &&data)
-			{ 
-				value = std::move(data); 
-				if (value->has_type()) 
-					throw std::runtime_error("*type_regex 'value' must not have a type.");
-			},
+				{ value = std::move(data); },
 			[this, &context](std::string const &, std::shared_ptr<luxem::value> &data)
 				{ build_preprocess(context, data); });
+		object.element(
+			"allow_missing",
+			[this](std::shared_ptr<luxem::value> &&data)
+				{ allow_missing = data->as<luxem::primitive>().get_bool(); });
 	}
 
 	step_result scan(scan_context &context, match_map &matches, std::shared_ptr<luxem::value> &target) override
 	{
-		if (!target->has_type()) return step_fail;
-		if (!type_definition.test(target->get_type(), matches)) return step_fail;
+		if (target->has_type() && !type_definition.test(target->get_type(), matches)) return step_fail;
+		else if (!allow_missing && !target->has_type()) return step_fail;
 		return scan_node(context, matches, target, value, true);
 	}
 	
@@ -400,10 +400,6 @@ struct alternate : special
 				{ patterns.emplace_back(std::move(data)); },
 			[this, &context](std::string const &, std::shared_ptr<luxem::value> &data)
 				{ build_preprocess(context, data); });
-		array_data.finally([this](void)
-		{
-			if (patterns.empty()) throw std::runtime_error("Cannot have *alt with no patterns.");
-		});
 	}
 
 	step_result scan(scan_context &context, match_map &matches, std::shared_ptr<luxem::value> &target) override
@@ -498,13 +494,6 @@ struct match_definition
 
 	step_result scan(scan_context &context, match_map &matches, std::shared_ptr<luxem::value> &target)
 	{
-		if (!pattern) 
-		{
-			std::stringstream message;
-			message << "*match " << id << " is missing 'pattern'.";
-			throw std::runtime_error(message.str());
-		}
-
 		struct match_scan_stackable : scan_stackable
 		{
 			match_map &matches;
@@ -532,13 +521,6 @@ struct match_definition
 				}
 				if (last_result == step_fail) return step_fail;
 
-				auto found = matches.trees.find(id);
-				if (found != matches.trees.end())
-				{
-					std::stringstream message;
-					message << "Match " << id << " stored multiple times.  Matches must only occur once.";
-					throw std::runtime_error(message.str());
-				}
 				if (context.verbose) std::cerr << "Saving match " << id << std::endl;
 				matches.trees.emplace(id, target);
 				return last_result;
@@ -688,7 +670,6 @@ struct scan_root_stackable : scan_stackable
 					if (context.get_to())
 						transform_root(matches, this->root, context.get_to(), context.verbose);
 					return begin_subtransform(context, next_state);
-					return step_continue;
 				}
 
 				return begin_recurse(next_state);
@@ -962,18 +943,7 @@ bool build_special(build_context &context, std::shared_ptr<luxem::value> &data)
 	}
 	else if (data->get_type() == "*wild")
 	{
-		auto replacement = std::make_shared<wildcard>();
-		/*data->as<luxem::reader::object_context>().element(
-			"recurse", 
-			[replacement](std::shared_ptr<luxem::value> &&data)
-			{ 
-				replacement->recurse = data->as<luxem::primitive>().get_bool(); 
-				std::cout << "raw is " << data->as<luxem::primitive>().get_primitive() << std::endl;
-				std::cout << "raw translated is " << data->as<luxem::primitive>().get_bool() << std::endl;
-				std::cout << "recurse is " << replacement->recurse << std::endl;
-			});
-		*/
-		data = replacement;
+		data = std::make_shared<wildcard>();
 	}
 	else if (data->get_type() == "*alt")
 	{

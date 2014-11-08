@@ -24,7 +24,20 @@ span.pre { font-family: monospace; font-size: 1.2em; color: #2080A0; }
 <p>luxemog is a tool for modifying <a href="https://github.com/Rendaw/luxem">luxem</a> documents.  A luxemog definition contains a list of transforms to apply to a document sequentially.  Each transform contains a pattern to match, which also extracts data, and a pattern to replace the match, which can use the extracted data.</p>
 <p>Table of contents:</p>
 <ul>
-	<li><a href="#luxemog_spec">Transform Specification</a></li>
+	<li>
+		<a href="#luxemog_spec">Transform Specification</a><br />
+		Specials
+		<ul>
+			<li><a href="#special_match">(*match)</a></li>
+			<li><a href="#special_wild">(*wild)</a></li>
+			<li><a href="#special_alt">(*alt)</a></li>
+			<li><a href="#special_regex">(*regex)</a></li>
+			<li><a href="#special_type_regex">(*type_regex)</a></li>
+			<li><a href="#special_string">(*string)</a></li>
+			<li><a href="#special_type">(*type)</a></li>
+			<li><a href="#special_error">(*error)</a></li>
+		</ul>
+	</li>
 	<li><a href="#luxemog_examples">Examples</a></li>
 	<li>
 		<a href="#app">luxemog</a>
@@ -45,33 +58,91 @@ span.pre { font-family: monospace; font-size: 1.2em; color: #2080A0; }
 	<div class="class">
 		<a name="luxemog_spec"></a>
 		<h1>Transform Specification</h1>
+		<p>The document root follows the format:</p>
 		<pre>(VERSION) [
-	to: PATTERN,
-	from: PATTERN,
-	matches: [
-		MATCHES
-	]
+	TRANSFORM,
+	...
 ]</pre>
-		<p><span class="pre">VERSION</span> should be <span class="pre">luxemog 0.1.1</span> exactly.  <span class="pre">matches</span> is optional, and contains out-of-tree match definitions.  For reversible transforms, placing match definitions in <span class="pre">matches</span> may be clearer than placing the match definition in <span class="pre">to</span> or <span class="pre">from</span>.</p>
+		<p><span class="pre">VERSION</span> should be <span class="pre">luxemog 0.1.1</span> exactly.</p>
+		<p><span class="pre">TRANSFORM</span> follows the format:</p>
+		<pre>{
+	from: PATTERN,
+	to: PATTERN,
+	matches: [
+		MATCH,
+		...
+	],
+	subtransforms: [
+		TRANSFORM,
+		...
+	]
+}</pre>
+		<p><span class="pre">matches</span> optionally contains out-of-tree match definitions.  For reversible transforms, placing match definitions in <span class="pre">matches</span> may be clearer than placing the match definition in <span class="pre">to</span> or <span class="pre">from</span>.</p>
+		<p><span class="pre">subtransforms</span> is optional and contains child transformations that are only applied if the parent transform matches.  <span class="pre">subtransforms</span> is applied after <span class="pre">to</span> when both are specified.</p>
 		<div class="method">
 			<h1>PATTERN</h1>
 			<p><span class="pre">PATTERN</span> can be any luxem tree.  A <span class="pre">to</span> <span class="pre">PATTERN</span> is compared to every subtree in the specified document.  If they match, the subtree will be replaced with the expanded <span class="pre">from</span> <span class="pre">PATTERN</span>.  <span class="pre">PATTERN</span> can contain special nodes, with types starting with <span class="pre">*</span>, which have special matching conditions and behaviors.  Special node recognition can be prevented by escaping the <span class="pre">*</span> in the type to <span class="pre">**</span>, which will be converted to <span class="pre">*</span> after the recognition step.</p>
 		</div>
 		<p>Special nodes:</p>
 		<div class="method">
+			<a name="special_match"></a>
 			<h1>(*match) id</h1>
 			<h1>(*match) {
-	id: ID,
+	id: id,
 	pattern: PATTERN
 }</h1>
-			<p>Can either be a string, where the string specifies the id, or an object with an <span class="pre">id</span> property.  When used in a <span class="pre">from</span> pattern, if the subtree matches <span class="pre">pattern</span>, saves the compared subtree with the id for later use.  When used in a <span class="pre">to</span> pattern, replaces itself with the subtree saved with id.</p>
-			<p>If <span class="pre">*match</span> is specified as a string in either <span class="pre">to</span> or <span class="pre">from</span>, the contents pattern must be re-specified as an object in <span class="pre">MATCHES</span> or the other <span class="pre">PATTERN</span> (<span class="pre">from</span> if a string in <span class="pre">to</span>, <span class="pre">to</span> if a string in <span class="pre">from</span>).</p>
+			<p>Valid in <span class="pre">from</span> and <span class="pre">to</span>.</p>
+			<p>In <span class="pre">from</span>, matches a subtree if <span class="pre">pattern</span> matches the subtree.  If unspecified, <span class="pre">pattern</span> is <span class="pre">(*wild)</span>.  The subtree is saved with <span class="pre">id</span> if successfully matched.</p>
+			<p>In <span class="pre">to</span>, restores the tree saved with <span class="pre">id</span>.  Throws an exception if there is no saved tree with <span class="pre">id</span>.</p>
 		</div>
 		<div class="method">
-			<h1>(*wild) {
-	recurse: true
-}</h1>
-			<p>Matches any subtree.  <span class="pre">recurse</span> is optional and defaults to true.  If <span class="pre">recurse</span> is false, the subtree will not be scanned modified with the current transform.  A <span class="pre">*wild</span> cannot be used at the top-level of a top-level <span class="pre">PATTERN</span> (<span class="pre">to</span> or <span class="pre">from</span>).</p>
+			<a name="special_wild"></a>
+			<h1>(*wild)</h1>
+			<p>Only valid in <span class="pre">from</span>.</p>
+			<p>Matches any subtree.</p>
+		</div>
+		<div class="method">
+			<a name="special_alt"></a>
+			<h1>(*alt) [ PATTERN, ...] </h1>
+			<p>Only valid in <span class="pre">from</span>.</p>
+			<p>Matches a subtree if any <span class="pre">PATTERN</span> matches.</p>
+		</div>
+		<div class="method">
+			<a name="special_regex"></a>
+			<h1>(*regex) REGEX </h1>
+			<p>Where <span class="pre">REGEX</span> can be</p>
+			<pre>expression</pre>
+			<pre>{ exp: expression, id: id, sub: substitute }</pre>
+			<p>or an array of either of the previous.</p>
+			<p>Only valid in <span class="pre">from</span>.  <span class="pre">id</span> can be an array of strings and <span class="pre">(null)</span> primitives.</p>
+			<p>If <span class="pre">sub</span> is unspecified, matches primitives if the regular expression <span class="pre">exp</span> matches the primitive's value.  The full match and marked submatches are saved with the respective non-null ids.</p>
+			<p>If <span class="pre">sub</span> is specified, replaces matches of <span class="pre">exp</span> in the primitive with <span class="pre">sub</span> and stores the result with <span class="pre">id</span>.</p>
+			<p>Uses the ECMAScript C++11 regex specification.</p>
+		</div>
+		<div class="method">
+			<a name="special_type_regex"></a>
+			<h1>(*type_regex) { type: REGEX, value: PATTERN, allow_missing: false }</h1>
+			<p>Only valid in <span class="pre">from</span>.  <span class="pre">allow_missing</span> is optional and defaults to false.</p>
+			<p>Applies the <span class="pre">type</span> regex to the type of the root of the current subtree, similarly to <span class="pre">(*regex)</span>.  If <span class="pre">allow_missing</span> is false and the current subtree has no type, the match fails.  If the match succeeds, comparison continues with <span class="pre">value</span> against the subtree root's value.</p>
+		</div>
+		<div class="method">
+			<a name="special_string"></a>
+			<h1>(*string) format</h1>
+			<p>Only valid in <span class="pre">to</span>.</p>
+			<p>Creates a string with the contents derived from <span class="pre">format</span>.</p>
+			<p>Formatting replaces replaces <span class="pre">&lt;id&gt;</span> substrings in the <span class="pre">format</span> string with the string saved with <span class="pre">id</span>.  <span class="pre">%</span> escapes the next character, so <span class="pre">%&lt;</span> becomes <span class="pre">&lt;</span> and <span class="pre">%%</span> becomes <span class="pre">%</span>.  Example: In <span class="pre">hello &lt;name&gt;, today is &lt;day&gt;</span>, <span class="pre">&lt;name&gt;</span> and <span class="pre">&lt;day&gt;</span> would be replaced, resulting in a string like <span class="pre">hello fried chicken, today is steeple</span>.</p>
+		</div>
+		<div class="method">
+			<a name="special_type"></a>
+			<h1>(*type) { type: format, value: PATTERN }</h1>
+			<p>Only valid in <span class="pre">to</span>.</p>
+			<p>Creates a tree from <span class="pre">value</span>, replacing the type of the root element with the formatted string <span class="pre">type</span>.  See <span class="pre">(*string)</span> for more information on formatting.</p>
+		</div>
+		<div class="method">
+			<a name="special_error"></a>
+			<h1>(*error) message</h1>
+			<p>Only valid in <span class="pre">to</span>.</p>
+			<p>Halts transformation and displays the string value.</p>
 		</div>
 	</div>
 </div>
@@ -92,15 +163,9 @@ span.pre { font-family: monospace; font-size: 1.2em; color: #2080A0; }
 			(*match) w/e,
 			28,
 		],
-		matches: [
-			(*match) {
-				id: w/e,
-				pattern: (*wild) {},
-			}
-		]
 	},
 ]</pre>
-		<p>This definition may be applied in reverse.  However, the reverse application is not the inverse of the forward application.</p>
+		<p>This definition may also be applied in reverse.</p>
 		<p>Input:</p>
 		<pre>[
 	[
